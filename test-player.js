@@ -12,10 +12,11 @@ import { readFileSync } from "node:fs";
 import { CFG } from "./src/config.js";
 import { G } from "./src/state.js";
 import { loadTileGrid, isWall, map } from "./src/world.js";
-import { loadLevel, registerEmit } from "./src/level-loader.js";
+import { loadLevel, registerEmit, registerBlockerSink } from "./src/level-loader.js";
 import {
   initPlayer, updatePlayer, effectiveMoveSpeed,
   applyDamageToPlayer, healPlayer, applyKnockbackToPlayer, registerAbility,
+  isCarryingCrate,
 } from "./src/player.js";
 
 let passed = 0, failed = 0;
@@ -54,6 +55,12 @@ function snap(o = {}) {
 const emitted = [];
 registerEmit((type, payload) => emitted.push({ type, payload }));
 const sawEmit = (type) => emitted.some((e) => e.type === type);
+// Most-recent emit of a type — for reason-specific checks (many crate:dropped fire).
+const lastEmitOf = (type) => [...emitted].reverse().find((e) => e.type === type);
+
+// Nav-blocker spy: capture markNavDirty tiles (default sink is a no-op).
+const navDirtied = [];
+registerBlockerSink({ registerBlocker() {}, markDirty(t) { navDirtied.push(t); } });
 
 /* ========================================================================= *
    1. Movement + slide (§12.2)
@@ -297,6 +304,237 @@ check("initPlayer sets loco NORMAL", G.player.loco === "NORMAL");
 check("initPlayer sets r = CFG.PLAYER.r", G.player.r === CFG.PLAYER.r);
 check("initPlayer sets carry null / iframe 0 / cooldown 0",
   G.player.carry === null && G.player.iframe === 0 && G.player.cooldown === 0);
+
+/* ========================================================================= *
+   11. Carry — pickup (§9, §12 item 2/7): hands-free contact → CARRYING,
+   crate spliced + nav dirtied; carrying + contact = no swap.
+ * ========================================================================= */
+openWorld();
+placePlayer(2, 2);
+{
+  const crate = { type: "crate", x: 3.5 * CFG.TILE, y: 2.5 * CFG.TILE };   // tile (3,2)
+  G.crates = [crate];
+  navDirtied.length = 0;
+  updatePlayer(snap({ move: { x: 1, y: 0 } }), 0.15);                       // step into overlap
+  check("pickup: hands-free crate contact enters CARRYING", G.player.loco === "CARRYING");
+  check("pickup: carry references the crate (type 'crate')",
+    G.player.carry && G.player.carry.entity === crate && G.player.carry.type === "crate");
+  check("pickup: crate spliced from G.crates", G.crates.indexOf(crate) === -1 && G.crates.length === 0);
+  check("pickup: nav dirtied at the crate's old tile (3,2)", navDirtied.some((t) => t.tx === 3 && t.ty === 2));
+  check("pickup: emits crate:pickup", sawEmit("crate:pickup"));
+  check("isCarryingCrate true while carrying", isCarryingCrate() === true);
+}
+// carrying + contact = no swap.
+placePlayer(2, 2);
+{
+  const held = { type: "crate", entity: {} };
+  G.player.loco = "CARRYING"; G.player.carry = held;
+  const other = { type: "crate", x: 3.5 * CFG.TILE, y: 2.5 * CFG.TILE };
+  G.crates = [other];
+  updatePlayer(snap({ move: { x: 1, y: 0 } }), 0.15);
+  check("carrying + crate contact = no swap (still holding original)", G.player.carry === held);
+  check("carrying + crate contact: other crate not picked up", G.crates.indexOf(other) === 0);
+}
+
+/* ========================================================================= *
+   12. Carry — stationary release / toss (§9, §12 item 7): tosses ≤1.5t to the
+   first free tile along aim; returns to NORMAL; re-inserts the crate.
+ * ========================================================================= */
+openWorld();
+placePlayer(3, 3);
+{
+  G.player.loco = "CARRYING";
+  G.player.carry = { type: "crate", entity: { type: "crate" } };
+  updatePlayer(snap({ move: { x: 0, y: 0 }, aim: { x: 1, y: 0 }, fireHeld: true }), 0);
+  check("toss: returns to NORMAL", G.player.loco === "NORMAL" && G.player.carry === null);
+  check("toss: crate re-inserted into G.crates", G.crates.length === 1);
+  const c = G.crates[0];
+  check("toss: settles 1 tile ahead along aim (≤1.5t, grid-snapped)",
+    ((c.x / CFG.TILE) | 0) === 4 && Math.abs(c.x - G.player.x) <= CFG.PLAYER.tossMax);
+  check("toss: emits crate:dropped(reason='toss')", lastEmitOf("crate:dropped")?.payload.reason === "toss");
+  check("isCarryingCrate false after release", isCarryingCrate() === false);
+}
+
+/* ========================================================================= *
+   13. Carry — moving release / drop-vault (§9, §5.1, §12 item 7): enters
+   VAULTING to +2t, invulnerable + non-colliding for vaultDur; non-walkable
+   landing degrades to a toss.
+ * ========================================================================= */
+// vault passes THROUGH a 1-tile wall (non-colliding) to the +2t landing, invuln.
+loadTileGrid([
+  "#######",
+  "#.#...#",
+  "#.#...#",
+  "#.....#",
+  "#######",
+]);
+{
+  G.player = { x: 1.5 * CFG.TILE, y: 1.5 * CFG.TILE, tx: 1, ty: 1 };
+  initPlayer();
+  G.crates = []; G.barrels = []; G.spawners = []; G.shots = [];
+  G.player.loco = "CARRYING";
+  G.player.carry = { type: "crate", entity: { type: "crate" } };
+  G.hp = 20;
+  const startX = G.player.x;
+  updatePlayer(snap({ move: { x: 1, y: 0 }, fireHeld: true }), 0);          // dt=0: enter cleanly, no drift
+  check("drop-vault: enters VAULTING", G.player.loco === "VAULTING");
+  check("drop-vault: vault dur = CFG.PLAYER.vaultDur", approx(G.player.vault.dur, CFG.PLAYER.vaultDur));
+  check("drop-vault: crate dropped + re-inserted on the start tile (1,1)",
+    G.crates.length === 1 && ((G.crates[0].x / CFG.TILE) | 0) === 1);
+  applyDamageToPlayer(5, "midair");
+  check("drop-vault: invulnerable mid-hop (damage no-op)", G.hp === 20);
+  for (let i = 0; i < 5; i++) updatePlayer(snap(), 0.1);                    // advance past dur (input ignored while vaulting)
+  check("drop-vault: returns to NORMAL after the hop", G.player.loco === "NORMAL" && G.player.vault === null);
+  check("drop-vault: lands 2t ahead, passing THROUGH the wall (non-colliding)",
+    approx(G.player.x, startX + CFG.PLAYER.vaultHop));
+}
+// non-walkable landing ⇒ degrade to a toss (no vault).
+loadTileGrid([
+  "#######",
+  "#..#..#",
+  "#######",
+]);
+{
+  G.player = { x: 1.5 * CFG.TILE, y: 1.5 * CFG.TILE, tx: 1, ty: 1 };
+  initPlayer();
+  G.crates = []; G.barrels = []; G.spawners = []; G.shots = [];
+  G.player.loco = "CARRYING";
+  G.player.carry = { type: "crate", entity: { type: "crate" } };
+  updatePlayer(snap({ move: { x: 1, y: 0 }, aim: { x: 1, y: 0 }, fireHeld: true }), 0);
+  check("drop-vault degrade: non-walkable landing → NORMAL toss (not VAULTING)",
+    G.player.loco === "NORMAL" && G.player.vault === null && G.player.carry === null);
+  check("drop-vault degrade: crate tossed / re-inserted", G.crates.length === 1);
+}
+
+/* ========================================================================= *
+   14. Carry — wall-vault (§9, §12 item 8): 1-thick wall + walkable far side ⇒
+   auto-drop + vault to far side; 2-thick ⇒ no vault (bump), crate still carried.
+ * ========================================================================= */
+loadTileGrid([
+  "#######",
+  "#.#...#",
+  "#######",
+]);
+{
+  G.player = { x: 1.5 * CFG.TILE, y: 1.5 * CFG.TILE, tx: 1, ty: 1 };
+  initPlayer();
+  G.crates = []; G.barrels = []; G.spawners = []; G.shots = [];
+  G.player.loco = "CARRYING";
+  G.player.carry = { type: "crate", entity: { type: "crate" } };
+  updatePlayer(snap({ move: { x: 1, y: 0 } }), 0.05);                       // walk into the 1-thick wall
+  check("wall-vault: 1-thick wall auto-enters VAULTING", G.player.loco === "VAULTING");
+  check("wall-vault: crate auto-dropped against the near face (1,1)",
+    G.crates.length === 1 && ((G.crates[0].x / CFG.TILE) | 0) === 1);
+  check("wall-vault: targets the far side (tile 3)", ((G.player.vault.to.x / CFG.TILE) | 0) === 3);
+  for (let i = 0; i < 5; i++) updatePlayer(snap(), 0.1);
+  check("wall-vault: lands on the far side (tile 3), back to NORMAL",
+    G.player.loco === "NORMAL" && ((G.player.x / CFG.TILE) | 0) === 3);
+}
+loadTileGrid([
+  "########",
+  "#.##...#",
+  "########",
+]);
+{
+  G.player = { x: 1.5 * CFG.TILE, y: 1.5 * CFG.TILE, tx: 1, ty: 1 };
+  initPlayer();
+  G.crates = []; G.barrels = []; G.spawners = []; G.shots = [];
+  const held = { type: "crate", entity: { type: "crate" } };
+  G.player.loco = "CARRYING"; G.player.carry = held;
+  updatePlayer(snap({ move: { x: 1, y: 0 } }), 0.05);
+  check("wall-vault: 2-thick wall ⇒ no vault (still CARRYING)",
+    G.player.loco === "CARRYING" && G.player.carry === held);
+  check("wall-vault: 2-thick wall ⇒ crate NOT dropped", G.crates.length === 0);
+}
+
+/* ========================================================================= *
+   15. Carry — STUN force-drop (real re-insert) + vault status guards (§5.1/§5.2,
+   §12 item 7): STUN drops in place; VAULTING cannot start while ENTANGLED/STUNNED.
+ * ========================================================================= */
+openWorld();
+placePlayer(6, 6);
+{
+  G.player.loco = "CARRYING";
+  G.player.carry = { type: "crate", entity: { type: "crate" } };
+  G.player.stun = 3.0;
+  const origRandom = Math.random; Math.random = () => 0;                    // deterministic stunVec
+  updatePlayer(snap({ move: { x: 1, y: 0 }, fireHeld: true }), 0);
+  Math.random = origRandom;
+  check("stun force-drop: carry cleared, back to NORMAL", G.player.carry === null && G.player.loco === "NORMAL");
+  check("stun force-drop: crate re-inserted on the player's tile (6,6)",
+    G.crates.length === 1 && ((G.crates[0].x / CFG.TILE) | 0) === 6 && ((G.crates[0].y / CFG.TILE) | 0) === 6);
+  check("stun force-drop: emits crate:dropped(reason='stun')", lastEmitOf("crate:dropped")?.payload.reason === "stun");
+  check("stunned: no VAULTING started (crate force-dropped first)", G.player.loco === "NORMAL");
+}
+// ENTANGLED: moving release cannot vault → degrades to a toss.
+openWorld();
+placePlayer(6, 6);
+{
+  G.player.loco = "CARRYING";
+  G.player.carry = { type: "crate", entity: { type: "crate" } };
+  G.player.entangle = 2.0;
+  updatePlayer(snap({ move: { x: 1, y: 0 }, aim: { x: 1, y: 0 }, fireHeld: true }), 0);
+  check("entangled: moving release cannot vault → degrades to toss (NORMAL)",
+    G.player.loco === "NORMAL" && G.player.vault === null && G.player.carry === null);
+}
+// ENTANGLED: wall-vault cannot start → bump, keep carrying.
+loadTileGrid([
+  "#######",
+  "#.#...#",
+  "#######",
+]);
+{
+  G.player = { x: 1.5 * CFG.TILE, y: 1.5 * CFG.TILE, tx: 1, ty: 1 };
+  initPlayer();
+  G.crates = []; G.barrels = []; G.spawners = []; G.shots = [];
+  const held = { type: "crate", entity: { type: "crate" } };
+  G.player.loco = "CARRYING"; G.player.carry = held; G.player.entangle = 2.0;
+  updatePlayer(snap({ move: { x: 1, y: 0 } }), 0.05);
+  check("entangled: wall-vault cannot start → bump, still CARRYING",
+    G.player.loco === "CARRYING" && G.player.carry === held && G.crates.length === 0);
+}
+
+/* ========================================================================= *
+   16. Carry — dropped crate holds a plate (§7.1.6, §12 item 7/9): a crate on a
+   '_' keeps its linked door open after the player leaves, until it is removed.
+ * ========================================================================= */
+loadLevel({
+  id: "hold-t", name: "HoldT",
+  tiles: [
+    "#######",
+    "#..d..#",   // plate-door 'd' at (3,1)
+    "#.._..#",   // plate '_'  at (3,2)
+    "#.....#",
+    "#######",
+  ],
+  placements: [
+    { type: "player", x: 1, y: 3 }, { type: "exit", x: 5, y: 3 },
+    { type: "door", x: 3, y: 1, id: "gate" }, { type: "plate", x: 3, y: 2, id: "pad" },
+  ],
+  links: [{ plate: "pad", door: "gate" }],
+});
+initPlayer();
+{
+  // Stand ADJACENT to the plate (tile 2,2), not on it, so the door stays closed
+  // until the crate itself presses the plate — then the crate alone holds it.
+  G.player.x = 2.5 * CFG.TILE; G.player.y = 2.5 * CFG.TILE;
+  G.player._platesPressed = new Set();
+  G.player.loco = "CARRYING";
+  G.player.carry = { type: "crate", entity: { type: "crate" } };
+  check("plate closed while player is off it and hands empty", isWall(3, 1) === true);
+  // stationary release aimed at the plate ⇒ crate settles on (3,2) and presses it.
+  updatePlayer(snap({ move: { x: 0, y: 0 }, aim: { x: 1, y: 0 }, fireHeld: true }), 0);
+  check("crate settled on the plate tile (3,2)",
+    G.crates.length === 1 && ((G.crates[0].x / CFG.TILE) | 0) === 3 && ((G.crates[0].y / CFG.TILE) | 0) === 2);
+  check("dropped crate presses the '_' (linked door opens)", isWall(3, 1) === false);
+  check("stationary release returns to NORMAL", G.player.loco === "NORMAL" && G.player.carry === null);
+  G.player.x = 1.5 * CFG.TILE; G.player.y = 3.5 * CFG.TILE;   // player walks away
+  updatePlayer(snap({ move: { x: 0, y: 0 } }), 0);
+  check("dropped crate holds the plate after the player leaves (door stays open)", isWall(3, 1) === false);
+  G.crates = [];                                              // crate removed
+  updatePlayer(snap({ move: { x: 0, y: 0 } }), 0);
+  check("removing the crate releases the plate (door closes)", isWall(3, 1) === true);
+}
 
 /* ========================================================================= *
    10. Import discipline (§11) — config/state/world/level-loader/input ONLY

@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 5 — player.js core: frame-ordering skeleton, locomotion, overlays, world hooks, damage/heal/knockback sinks)
+**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 6 — player.js carry system: pickup, toss, drop-vault, wall-vault, STUN force-drop; coord hazard resolved)
 **State in one line:** **Subsystem #1 (Level loader + generator) is BUILT and
 tested headlessly.** Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -21,14 +21,18 @@ current or the next session starts blind.
 
 - [x] **§8 Level** — **BUILT.** Loader DONE (schema/validate/loadLevel/tile-state+links/spawn-rule placement; tile set + dark stamps). Generator content DONE (`level-plan.js`: eligible/budget/roster/evalRamp, pure fn of n). Generator geometry/solvability/assembly DONE (`level-generator.js`: 4 archetypes, roster→spawnRules+placements, §5.4 solvability + arena fallback, Q3 `G._prevDark` guard, music-key stamping). Owed by later subsystems: real entity factories (#2/#4), nav sink (#3), events emit (#11), light (#7), MUSIC registry (#11.3).
 - [ ] §2 Player — movement, health/overheal, melee, ranged, carry/vault states.
-  **Phase 5 DONE (not yet BUILT):** `player.js` core — the load-bearing frame-
+  **Phases 5–6 DONE (not yet BUILT):** `player.js` core — the load-bearing frame-
   update ordering skeleton, NORMAL locomotion + multiplicative speed stack, the
   two-source carry-aware collision filter, status overlays (ENTANGLED shave /
   STUNNED random-walk + force-drop / POST-HIT invuln), world hooks (plate press
-  by weight, key-spend on `D`), VAULTING kinematics, and the damage/heal/
-  knockback sinks + abilities registry seam. Carry bodies (pickup/toss/vault
-  ENTRY — Phase 6) and ranged fire + shot motion/ricochet (Phase 7) are wired as
-  named stub hooks in their ordering slots. Box stays UNCHECKED until those land.
+  by weight + resting-crate hold, key-spend on `D`), VAULTING kinematics, the
+  damage/heal/knockback sinks + abilities registry seam **(Phase 5)**, and the
+  full **crate carry system (Phase 6)**: automatic pickup (splice + nav-dirty),
+  stationary toss, moving drop-vault, wall-vault (1- vs ≥2-thick), STUN force-drop,
+  degrade-to-toss rules, and the `isCarryingCrate()` pushback flag for #4. Ranged
+  fire + shot motion/ricochet (Phase 7) are still wired as named stub hooks
+  (`tryFire`/`updateShots`) in their ordering slots. Box stays UNCHECKED until
+  fire lands.
 - [ ] §7 Interactive objects — crates, barrels, shrapnel, carry physics
 - [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying
 - [ ] §6 Enemies + spawners
@@ -41,16 +45,18 @@ Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`,
 `level-plan.js` (generator content, pure fn of n, 6KB), `level-generator.js`
 (geometry/solvability/`generateLevel`, 27KB), `input.js` (device read,
 mode-lock FSM, `deriveSnapshot`), `player.js` (locomotion/overlays/sinks +
-ordering skeleton, ~13KB, new). `world.js` re-adds `moveBody`
+ordering skeleton + **crate carry system**, ~21KB). `world.js` re-adds `moveBody`
 (2-source, filtered) + `bodyHitsBlocker`; now imports `state.js` (S4, no cycle).
-Tests: `test-config.js`, `test-world.js`, `test-level-loader.js`,
-`test-level-content.js`, `test-level-generator.js` (20 checks),
-`test-level-integration.js` (16 checks), `test-input.js` (19 checks),
-`test-player.js` (49 checks) — all green (275 checks total). Subsystem #1
-complete; player subsystem (#2) in progress (SPEC-PLAYER Phase 1 config data
-done; Phase 2 world.js collision seam done; Phase 3 level-loader.js coord-keyed
-plate press + emit export done; Phase 4 input.js done; Phase 5 player.js core
-done — carry (Phase 6) + fire/projectiles (Phase 7) pending).
+`level-loader.js` movable-entity placeholders now carry **pixel** `x,y`
+(Phase-6 coord reconciliation, below). Tests: `test-config.js`, `test-world.js`,
+`test-level-loader.js`, `test-level-content.js`, `test-level-generator.js`
+(20 checks), `test-level-integration.js` (16 checks), `test-input.js`
+(19 checks), `test-player.js` (88 checks) — all green (314 checks total).
+Subsystem #1 complete; player subsystem (#2) in progress (SPEC-PLAYER Phase 1
+config data done; Phase 2 world.js collision seam done; Phase 3 level-loader.js
+coord-keyed plate press + emit export done; Phase 4 input.js done; Phase 5
+player.js core done; Phase 6 carry system done — fire/projectiles (Phase 7)
+pending).
 
 ## Implementation sequencing (agreed order)
 
@@ -299,6 +305,92 @@ either (a) the real crate/blocker entities carry pixel `x,y` (recommended — ma
 reads `e.tc`. SPEC-PLAYER §2 pins the crate shape as the loader placeholder
 `{type,x,y,tc,blocks}`, so this is a contract reconciliation, not new design — but
 it needs a sign-off glance before Phase 6 wires real carry collision.
+
+### 2026-07-05 — RESOLVED (option a): movable entities carry PIXEL x,y — Phase 6 (SPEC-PLAYER)
+The Phase-5 flagged coordinate mismatch is resolved as the STATUS-recommended
+**option (a)**: `level-loader.js`'s `mkPlaceholder` now stores `e.x,e.y` as the
+**pixel** world position (tile center; `tc` unchanged), so all dynamic entities
+(player, crates, spawners, later enemies/shots) share **one pixel coordinate
+space**. `world.bodyHitsBlocker` already measured `dx=x-e.x` in pixels and the
+carry system re-positions dropped crates in pixels, so this makes loader-placed
+crates collide/pickup correctly with **no** change to `world.js`. Tile-keyed
+lookups (nav-dirty, plate press) derive the tile via `(x/TILE)|0`. Blast radius
+was one shipped test assertion: `test-level-loader.js`'s scatter-legality scan
+read `e.x,e.y` as tile indices (`map[e.y][e.x]`) — updated to derive the tile
+from the pixel center (its *intent*, "no entity on a wall/plate/exit tile," is
+unchanged). `test-world.js`/`test-player.js` already used pixel crate coords, so
+they were already honest and stayed green. This closes the Phase-5 hazard; the
+"real crate factory owed by #2" is satisfied by the reconciled placeholder (carry
+state lives on `G.player.carry`, the crate schema is unchanged otherwise).
+
+### 2026-07-05 — carry system: vault detection, degrade rules, adopted behaviors — Phase 6 (SPEC-PLAYER)
+`player.js` fills the Phase-5 carry stub hooks with the real bodies (§9, §5.1).
+Structure and the load-bearing decisions:
+- **Dispatch (in the CARRY slot, AFTER move+collision):** CARRYING + `fireHeld`
+  ⇒ release; CARRYING + move-into-wall (no fire) ⇒ wall-vault; hands-free ⇒
+  automatic pickup. STUN force-drop stays in the Phase-5 slot BEFORE move
+  (`dropCarried`, now a real in-place re-insert). VAULTING short-circuits the
+  whole slot (unchanged).
+- **Release trigger is LEVEL, not edge** (`fireHeld` true while CARRYING ⇒
+  release). It's effectively one-shot because release exits CARRYING; pickup runs
+  in the hands-free branch so a fresh pickup can't release the same frame (1-frame
+  carry before a held-fire toss). Adopted; flagged for the play-feel pass.
+- **Toss reach is grid-snapped to whole tiles:** `floor(tossMax 48 / TILE 32) = 1`,
+  so a stationary toss settles **≤1 tile** ahead along aim (within the 1.5 t reach,
+  never mid-tile), stopping at the first wall/blocker, min = drop-in-place. This
+  avoids the tile-boundary rounding ambiguity of a raw 1.5-tile pixel raycast
+  (1.5 t lands on a tile edge). If the play-feel pass wants the extra half-tile,
+  bump `tossMax` or change the snap.
+- **Vault detection (§9):** moving-release vaults `from + vaultHop(64=2t)` along
+  MOVE, landing validated **at ENTRY only** (`!isWall(landingTile)`) — a
+  non-walkable landing **degrades to a stationary toss** (the single degrade
+  target for *any* vault that can't start). Wall-vault raycasts **tile-by-tile
+  from the player tile** along the dominant move axis: `ahead1` solid AND `ahead2`
+  walkable ⇒ 1-thick ⇒ drop-against-near-face + vault to the far tile center;
+  `ahead2` also solid ⇒ ≥2-thick ⇒ **no vault, just a bump** (crate stays carried).
+  VAULTING cannot start while ENTANGLED/STUNNED (`canVault`): moving-release then
+  degrades to a toss, wall-vault becomes a plain bump. (STUN also force-drops the
+  crate a step earlier, so its carry path is unreachable — `canVault`'s stun test
+  is belt-and-suspenders.)
+- **Plate hold by resting crates (§7.1.6):** the loader's plate seam is a boolean
+  per plate (no refcount), so `player.js` is the single authority: `updatePlatePress`
+  OR-combines the player footprint **and** every resting crate's tile into one
+  pressed-set and diffs it — a plate releases only when *neither* the player nor
+  any crate sits on it. Called from `doMovement` (player moved) AND from every
+  pickup/drop (crates changed), so a dropped crate keeps a door open after the
+  player walks off, until the crate is removed.
+- **Every drop path funnels through `dropCrateAtTile`** (toss / moving-drop /
+  wall-vault / stun) so none can miss the `G.crates` push + `markNavDirty` (a
+  missed nav-dirty = ghost blocker — the flagged risk). It reuses `carry.entity`
+  (preserves identity for future barrels) and re-presses the plate under it.
+- **`carry.type` is `"crate"`-only**, shaped to admit `"barrel"` (SPEC-BARRELS)
+  without rework; pushback is exposed as `isCarryingCrate()` for #4's melee loop
+  (no loop here — #4 executes the 1.5 t enemy pushback + bat exemption, §6.4).
+- **Q-P3 adopted:** "moving" = move-input nonzero this frame (a tap at release can
+  trigger a vault) — for the play-feel pass. **Q-P4 adopted:** vault landing is
+  validated at entry only; an enemy may occupy it mid-hop — land anyway (VAULTING
+  is invulnerable + non-colliding), resolve overlap next frame.
+
+### 2026-07-05 — FLAGGED (play-feel, not correctness): two emergent carry edges — Phase 6
+Two edges emerge from composing spec-adopted behaviors; both keep state
+consistent (no crash/corruption), so they're logged for the play-feel pass, not
+fixed by invented design (per CLAUDE.md "surface, don't invent"):
+1. **Toss-into-wall re-pickup oscillation.** A stationary toss facing a
+   wall/blocker drops the crate **in place** (min 1-tile placement fell back to
+   the player's own tile). Since pickup is *automatic on contact* and release is
+   *level-triggered*, holding fire against a wall while carrying oscillates
+   pickup→toss→pickup every ~2 frames (emitting `crate:pickup`/`crate:dropped`
+   each cycle). Normal tosses land 1 tile ahead (32 px > the 28 px pickup range),
+   so this only occurs when the toss can't advance at all. A drop→re-pickup
+   "must break contact first" latch would fix it if it bothers play-feel.
+2. **Diagonal wall-vault on the dominant axis.** Wall-vault triggers on
+   *tile-adjacency* along the dominant move axis (the prompt's literal "raycast
+   from player tile along move"), not on a tight pixel press (moveBody's
+   whole-step revert leaves a fuzzy up-to-step-size gap, so tight adjacency isn't
+   reliably reachable). Consequence: moving diagonally with the dominant component
+   into a 1-thick wall can vault across it even when the player meant to slide
+   along the perpendicular axis. Parallel movement (dominant axis perpendicular to
+   the wall) is safe. A "both axes blocked" or intent gate would tighten it.
 
 ## Known open items (non-blocking for build)
 
@@ -654,3 +746,57 @@ blocker entity coordinate mismatch (loader stores tile `x,y`; `bodyHitsBlocker`
 reads pixels), owed to Phase 6 to reconcile (SPEC-PLAYER §2 pins the crate shape,
 so it's a contract reconciliation, not new design). **§2 build-status box NOT
 flipped to BUILT** (carry + fire pending). No git.
+
+### 2026-07-05 — SPEC-PLAYER Phase 6 (`player.js` — crate carry system)
+
+Filled the Phase-5 carry stub hooks with the real bodies (SPEC-PLAYER §9, §5.1);
+`player.js` grew ~13KB→~21KB (still one concern — the player entity). Extended
+`test-player.js` (49→88 checks). Also resolved the Phase-5 coordinate hazard by
+editing `level-loader.js`'s `mkPlaceholder` (movable entities now carry pixel
+`x,y`) + one `test-level-loader.js` assertion. No git. Import discipline held
+(player.js still config/state/world/level-loader/input only; added `markNavDirty`
+from the loader — same module).
+
+Implements (§9):
+- **Pickup** — automatic on hands-free overlap with a free crate (pixel circle at
+  `r+TILE/2`): splice from `G.crates`, `markNavDirty` the old tile, `carry =
+  {type:"crate", entity}`, `loco="CARRYING"`, emit `crate:pickup`. Locked while
+  STUNNED; no swap while carrying (crate stays solid via the Phase-5 filter).
+- **Release** (`fireHeld` while CARRYING, P5) — branches on move-input this frame:
+  stationary ⇒ short toss (≤1 grid tile along aim, stop at first wall/blocker,
+  min drop-in-place, press a `_` under it); moving ⇒ drop-in-place + auto-vault
+  `+2t` along move, landing validated at entry, non-walkable ⇒ degrade to toss.
+- **Wall-vault** — CARRYING + moving into a 1-thick wall (ahead1 solid, ahead2
+  walkable) ⇒ drop against the near face + vault to the far tile; ≥2-thick ⇒ bump
+  (crate kept). Crate-only. Guarded by `canVault` (no entry while ENTANGLED/STUNNED).
+- **STUN force-drop** — `dropCarried` is now a real in-place re-insert (settles the
+  crate on the current tile, presses a `_`, back to NORMAL) BEFORE move resolves.
+- **Plate hold** — `updatePlatePress` OR-combines player + resting-crate weight so a
+  dropped crate keeps a door open until removed (loader plate seam is a bare
+  boolean; player.js is the single OR authority). Called from move + every
+  pickup/drop.
+- **Pushback flag** — `isCarryingCrate()` exported for #4's melee loop (§6.4); no
+  loop here.
+
+All drop paths funnel through `dropCrateAtTile` (guarantees the `G.crates` push +
+`markNavDirty`, reuses `carry.entity` for future-barrel identity, re-presses the
+plate). `carry.type` is `"crate"`-only, shaped for `"barrel"` later.
+
+Tests added (§12 items 2/7/8/9): pickup (splice + nav-dirty spy + `crate:pickup` +
+no-swap), stationary toss (≤1t settle + `crate:dropped(reason=toss)` + NORMAL),
+moving drop-vault (VAULTING + invulnerable mid-hop + lands +2t through a wall,
+non-colliding + degrade-on-non-walkable-landing), wall-vault (1-thick vaults to
+far side / 2-thick bumps, crate kept), STUN real force-drop (re-insert on the
+player tile + `reason=stun`), vault status guards (ENTANGLED moving-release
+degrades / ENTANGLED wall-vault bumps / STUNNED can't start), and the
+dropped-crate-holds-plate lifecycle (press → hold after player leaves → release on
+removal). Full suite green, **314 checks** (config 17 / world 35 / level-loader 40
+/ level-content 79 / level-generator 20 / level-integration 16 / input 19 /
+player 88).
+
+**Decisions surfaced & logged under Architecture:** the coordinate hazard RESOLVED
+as option (a) (pixel entity `x,y`); the vault-detection + degrade rules + the
+Q-P3/Q-P4 adopted behaviors; and two emergent **play-feel** edges flagged (not
+fixed): toss-into-wall re-pickup oscillation, and diagonal wall-vault on the
+dominant axis. **§2 build-status box NOT flipped to BUILT** (ranged fire +
+projectiles, Phase 7, still pending). No git.

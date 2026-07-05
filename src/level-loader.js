@@ -47,9 +47,16 @@ export function emit(type, payload) { if (emitFn) emitFn(type, payload); }
    The loader must not import player.js/enemies.js (they don't exist and would
    be a forward/circular hazard). It calls registered factories; real entity
    modules override the placeholders below when they land. A placeholder is a
-   minimal inert object { type, x, y, tc, blocks } (x,y are TILE coords, tc the
-   pixel center); the spawner placeholder additionally carries its variant, its
-   eligible(n)-filtered enemy table, and ramped interval/live-cap for #4. */
+   minimal inert object { type, x, y, tc, blocks } where x,y are the PIXEL world
+   position (tile center) and tc the same pixel center; the spawner placeholder
+   additionally carries its variant, its eligible(n)-filtered enemy table, and
+   ramped interval/live-cap for #4.
+
+   COORD RECONCILIATION (SPEC-PLAYER Phase 6, was flagged in STATUS.md): entity
+   x,y are PIXELS (not tile indices). world.bodyHitsBlocker measures dx=x-e.x in
+   pixels, the player lives in pixels, and the carry system re-positions dropped
+   crates in pixels — so all dynamic entities share one pixel coordinate space.
+   Tile-keyed lookups (nav-dirty, plate press) derive the tile via (x/TILE)|0. */
 const entityFactories = new Map();
 export function registerEntityFactory(type, fn) { entityFactories.set(type, fn); }
 
@@ -61,8 +68,8 @@ const ENTITY_ARRAY = {
 
 function mkPlaceholder(blocks, extra) {
   return (p) => {
-    const tc = tileCenter(p.x, p.y);
-    const e = { type: p.type, x: p.x, y: p.y, tc, blocks };
+    const tc = tileCenter(p.x, p.y);            // p.x,p.y are placement TILE coords
+    const e = { type: p.type, x: tc.x, y: tc.y, tc, blocks };   // x,y = PIXEL world pos (see coord note above)
     if (p.kind != null) e.kind = p.kind;
     return extra ? extra(e, p) : e;
   };

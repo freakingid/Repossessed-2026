@@ -21,7 +21,7 @@
 import { CFG } from "./config.js";
 import { G } from "./state.js";
 import { moveBody, bodyHitsWall, isWall, map as worldMap } from "./world.js";
-import { setPlatePressedAt, openLockedDoor, emit } from "./level-loader.js";
+import { setPlatePressedAt, openLockedDoor, markNavDirty, emit } from "./level-loader.js";
 import { getSnapshot } from "./input.js";
 
 /* ---- Ability seam (§10, register-callbacks) ------------------------------
@@ -258,19 +258,20 @@ function integrateKnockback(p, dt) {
 }
 
 /* ---- Pressure-plate press by weight (§4.3, §7.1.6) -----------------------
-   While the body overlaps a '_' plate tile it is held pressed; on leaving,
-   released. Both go through the loader's coord-keyed seam (single recompute
-   path). Dropped-crate hold is Phase 6. */
+   A '_' plate is held pressed while ANY weight rests on it: the player body OR
+   a dropped crate resting on its tile. The loader's plate seam is a boolean per
+   plate (no refcount), so player.js is the single authority that OR-combines the
+   two weight sources into one pressed-set and diffs it against the previous set —
+   a plate only releases when neither the player nor any crate sits on it. Called
+   from doMovement (player moved) AND from every crate pickup/drop (crates
+   changed), so a dropped crate keeps its door open after the player walks off,
+   until the crate itself is removed. */
 function updatePlatePress(p) {
-  const r = p.r;
-  const minX = ((p.x - r) / CFG.TILE) | 0, maxX = ((p.x + r) / CFG.TILE) | 0;
-  const minY = ((p.y - r) / CFG.TILE) | 0, maxY = ((p.y + r) / CFG.TILE) | 0;
   const now = new Set();
-  for (let ty = minY; ty <= maxY; ty++) {
-    const row = worldMap[ty];
-    if (!row) continue;
-    for (let tx = minX; tx <= maxX; tx++)
-      if (row[tx] === "_") now.add(tx + "," + ty);
+  addFootprintPlates(now, p.x, p.y, p.r);           // player weight
+  if (G.crates) for (const e of G.crates) {         // resting crates each hold their tile
+    const tx = (e.x / CFG.TILE) | 0, ty = (e.y / CFG.TILE) | 0;
+    if (worldMap[ty] && worldMap[ty][tx] === "_") now.add(tx + "," + ty);
   }
   const prev = p._platesPressed || new Set();
   for (const key of prev)
@@ -278,6 +279,18 @@ function updatePlatePress(p) {
   for (const key of now)
     if (!prev.has(key)) { const [tx, ty] = key.split(",").map(Number); setPlatePressedAt(tx, ty, true); }
   p._platesPressed = now;
+}
+
+// Add every '_' plate tile under an AABB(radius) footprint at (x,y) to `set`.
+function addFootprintPlates(set, x, y, r) {
+  const minX = ((x - r) / CFG.TILE) | 0, maxX = ((x + r) / CFG.TILE) | 0;
+  const minY = ((y - r) / CFG.TILE) | 0, maxY = ((y + r) / CFG.TILE) | 0;
+  for (let ty = minY; ty <= maxY; ty++) {
+    const row = worldMap[ty];
+    if (!row) continue;
+    for (let tx = minX; tx <= maxX; tx++)
+      if (row[tx] === "_") set.add(tx + "," + ty);
+  }
 }
 
 /* ---- Abilities (§10) — edge-triggered, locked while stunned --------------- */
@@ -347,13 +360,191 @@ export function applyKnockbackToPlayer(dirX, dirY, impulse) {
 }
 
 /* =========================================================================
-   STUB HOOKS — filled by later phases; present now so the ordering skeleton is
+   CARRY SYSTEM (§9) — the CARRY slot, run AFTER move+collision. Dispatches:
+     hands-free → automatic pickup on crate overlap
+     CARRYING + fire input → release (stationary toss | moving drop+vault)
+     CARRYING + moving into a 1-thick wall → wall-vault
+   STUN force-drop runs earlier (updatePlayer step 2, BEFORE move); see
+   dropCarried. carry.type is "crate"-only here, shaped to admit "barrel" later
+   (SPEC-BARRELS) without rework.
+   ========================================================================= */
+function carryActions(p, snap, dt) {
+  if (p.loco === "CARRYING") {
+    // While CARRYING, the fire input is repurposed as the RELEASE command (P5).
+    if (snap.fireHeld) { releaseCarry(p, snap); return; }
+    // No release ⇒ a carrying player walking into a 1-thick wall auto-vaults it.
+    tryWallVault(p, snap);
+    return;
+  }
+  // Hands-free only: automatic pickup on contact (no button). Locked while
+  // STUNNED (§5.2: pickup locked). Already CARRYING/VAULTING/DEAD never reach here.
+  if (p.loco === "NORMAL" && p.stun <= 0) tryPickup(p);
+}
+
+/* ---- Pickup (§9, automatic) ----------------------------------------------
+   Hands-free overlap with a free crate ⇒ CARRYING. The crate is spliced from
+   the collision/nav sources (out of G.crates, its tile nav-dirtied) so it stops
+   blocking while held; carry state lives on G.player, not the crate. */
+function tryPickup(p) {
+  if (p.carry) return;                                // safety: never swap
+  const crate = firstOverlappingCrate(p);
+  if (!crate) return;
+  const idx = G.crates.indexOf(crate);
+  if (idx >= 0) G.crates.splice(idx, 1);
+  markNavDirty(crateTile(crate));                     // old tile no longer blocks
+  updatePlatePress(p);                                // crate lifted ⇒ release its plate (unless player holds it)
+  p.carry = { type: "crate", entity: crate };
+  p.loco = "CARRYING";
+  emit("crate:pickup", { x: p.x, y: p.y, tx: (p.x / CFG.TILE) | 0, ty: (p.y / CFG.TILE) | 0 });
+}
+
+// First crate whose one-tile footprint overlaps the player body, or null. Pixel
+// circle test at (r + TILE/2), matching world.bodyHitsBlocker's contract.
+function firstOverlappingCrate(p) {
+  if (!G.crates) return null;
+  const rr = p.r + CFG.TILE / 2;
+  for (const e of G.crates) {
+    const dx = p.x - e.x, dy = p.y - e.y;
+    if (dx * dx + dy * dy < rr * rr) return e;
+  }
+  return null;
+}
+
+/* ---- Release (§9, P5) — fire input while CARRYING ------------------------
+   Branch on move-input THIS FRAME (nonzero = "moving", NOT measured velocity —
+   Q-P3): moving ⇒ drop-in-place + auto-vault; stationary (or vault-blocked) ⇒
+   short toss along aim. */
+function releaseCarry(p, snap) {
+  const move = snap.move || { x: 0, y: 0 };
+  const moving = move.x !== 0 || move.y !== 0;
+  if (moving && canVault(p)) movingReleaseVault(p, snap, move);
+  else stationaryToss(p, snap);                       // stationary, or entangled/stunned ⇒ degrade to toss
+}
+
+// Stationary release: settle the crate on the first free tile up to tossMax(1.5t)
+// along aim; press a '_' under it; back to NORMAL. Also the degrade target for a
+// vault that can't happen. Never rolls — a single grid settle (§7.1.6).
+function stationaryToss(p, snap) {
+  const t = tossSettleTile(p, snap.aim || { x: 1, y: 0 });
+  dropCrateAtTile(p, t.tx, t.ty, "toss");
+  p.loco = "NORMAL";
+}
+
+// Moving release: drop on the player's current tile, then VAULT to from+2t along
+// move. Landing validated at ENTRY only (Q-P4) — if it isn't walkable, degrade to
+// a stationary toss instead of vaulting.
+function movingReleaseVault(p, snap, move) {
+  const a = unit(move);
+  const to = { x: p.x + a.x * CFG.PLAYER.vaultHop, y: p.y + a.y * CFG.PLAYER.vaultHop };
+  if (!walkableTile((to.x / CFG.TILE) | 0, (to.y / CFG.TILE) | 0)) { stationaryToss(p, snap); return; }
+  dropCrateAtTile(p, (p.x / CFG.TILE) | 0, (p.y / CFG.TILE) | 0, "drop-vault");
+  enterVault(p, to);
+}
+
+/* ---- Wall-vault (§9, crate-only) -----------------------------------------
+   CARRYING + moving into a wall EXACTLY 1 tile thick along the move axis with a
+   walkable far tile ⇒ auto-drop against the near face + vault to the far side.
+   Raycast from the player tile along move: ahead1 solid AND ahead2 walkable ⇒
+   1-thick ⇒ vault; ahead2 also solid ⇒ ≥2-thick ⇒ no vault, just a bump (the hop
+   can't clear two tiles) and the crate stays carried. */
+function tryWallVault(p, snap) {
+  const move = snap.move || { x: 0, y: 0 };
+  if (move.x === 0 && move.y === 0) return;           // not moving ⇒ no wall-vault
+  if (!canVault(p)) return;                           // entangled/stunned ⇒ bump only, keep carrying
+  const dir = dominantAxis(move);
+  const ptx = (p.x / CFG.TILE) | 0, pty = (p.y / CFG.TILE) | 0;
+  const a1x = ptx + dir.dx, a1y = pty + dir.dy;       // ahead1 (the wall?)
+  const a2x = ptx + 2 * dir.dx, a2y = pty + 2 * dir.dy; // ahead2 (far side)
+  if (!isWall(a1x, a1y)) return;                      // not blocked by a wall ahead
+  if (isWall(a2x, a2y)) return;                       // ≥2-thick ⇒ bump, crate stays carried
+  dropCrateAtTile(p, ptx, pty, "wall-vault");         // drop against the near face
+  enterVault(p, { x: (a2x + 0.5) * CFG.TILE, y: (a2y + 0.5) * CFG.TILE });
+}
+
+/* ---- Drop / vault helpers ------------------------------------------------ */
+
+// Re-insert the carried crate as a resting blocker at tile (tx,ty): reposition
+// (pixel center), push to G.crates, nav-dirty, press a '_' under it, clear carry,
+// emit. Used by EVERY drop path (toss / moving-drop / wall-vault / stun) so none
+// can miss the G.crates push + markNavDirty (a missed nav-dirty = ghost blocker).
+function dropCrateAtTile(p, tx, ty, reason) {
+  const crate = (p.carry && p.carry.entity) || {};
+  const cx = (tx + 0.5) * CFG.TILE, cy = (ty + 0.5) * CFG.TILE;
+  crate.type = crate.type || "crate";
+  crate.x = cx; crate.y = cy; crate.tc = { x: cx, y: cy };
+  crate.blocks = true;
+  if (!G.crates) G.crates = [];
+  G.crates.push(crate);
+  markNavDirty({ tx, ty });
+  p.carry = null;
+  updatePlatePress(p);                                // press the '_' the crate now rests on (if any)
+  emit("crate:dropped", { reason, x: cx, y: cy, tx, ty });
+}
+
+// Enter VAULTING toward `to` (a pixel point). advanceVault (§5.1) lerps from→to
+// over vaultDur and auto-returns to NORMAL; during it collision + input are
+// skipped and iframe is treated active (applyDamageToPlayer no-ops on VAULTING).
+function enterVault(p, to) {
+  p.vault = { t: 0, dur: CFG.PLAYER.vaultDur, from: { x: p.x, y: p.y }, to: { x: to.x, y: to.y } };
+  p.loco = "VAULTING";
+}
+
+// VAULTING cannot be entered while ENTANGLED or STUNNED (§5.1). (Stun also
+// force-drops the crate before this runs, so stun is belt-and-suspenders.)
+function canVault(p) { return p.entangle <= 0 && p.stun <= 0; }
+
+// Farthest free tile within tossMax along `aim`, stopping at the first
+// wall/blocker; falls back to the player's own tile (min 1-tile placement).
+// Whole-tile steps: tossMax(48)/TILE(32) floors to 1, so a toss settles ≤1 tile
+// ahead — within the 1.5 t reach and grid-snapped (a crate never lands mid-tile).
+function tossSettleTile(p, aim) {
+  const a = unit(aim);
+  const ptx = (p.x / CFG.TILE) | 0, pty = (p.y / CFG.TILE) | 0;
+  let best = { tx: ptx, ty: pty };
+  const maxTiles = Math.max(1, Math.floor(CFG.PLAYER.tossMax / CFG.TILE));
+  for (let k = 1; k <= maxTiles; k++) {
+    const tx = ((p.x + a.x * k * CFG.TILE) / CFG.TILE) | 0;
+    const ty = ((p.y + a.y * k * CFG.TILE) / CFG.TILE) | 0;
+    if (isWall(tx, ty) || tileHasBlocker(tx, ty)) break;
+    best = { tx, ty };
+  }
+  return best;
+}
+
+// Does any movable blocker (crate/barrel/spawner) rest on tile (tx,ty)?
+function tileHasBlocker(tx, ty) {
+  for (const arr of [G.crates, G.barrels, G.spawners]) {
+    if (!arr) continue;
+    for (const e of arr)
+      if (((e.x / CFG.TILE) | 0) === tx && ((e.y / CFG.TILE) | 0) === ty) return true;
+  }
+  return false;
+}
+
+const walkableTile = (tx, ty) => !isWall(tx, ty);
+const crateTile = (e) => ({ tx: (e.x / CFG.TILE) | 0, ty: (e.y / CFG.TILE) | 0 });
+function unit(v) { const m = Math.hypot(v.x, v.y); return m > 0 ? { x: v.x / m, y: v.y / m } : { x: 1, y: 0 }; }
+// Dominant move axis as a one-axis unit step (wall-vault raycasts along it).
+function dominantAxis(move) {
+  return Math.abs(move.x) >= Math.abs(move.y)
+    ? { dx: Math.sign(move.x), dy: 0 }
+    : { dx: 0, dy: Math.sign(move.y) };
+}
+
+/* ---- Carried-crate pushback flag (§6.4) ----------------------------------
+   #4's melee loop reads this: on player↔enemy contact while it's true, push the
+   enemy back 1.5 t and SKIP the damage exchange (the crate is a bumper) — except
+   bats (they fly over). The pushback + bat exemption execute in #4; player.js
+   only exposes the state. */
+export function isCarryingCrate() {
+  const p = G.player;
+  return !!(p && p.loco === "CARRYING" && p.carry && p.carry.type === "crate");
+}
+
+/* =========================================================================
+   STUB HOOKS — filled by Phase 7; present now so the ordering skeleton is
    correct and complete (§11 "wire the stub hooks in their correct slots now").
    ========================================================================= */
-
-// Carry actions: pickup (hands-free contact) / release (toss or drop+vault) /
-// wall-vault. Phase 6 fills this. No-op now.
-function carryActions(p, snap, dt) { /* Phase 6 — crate carry system (§9) */ }
 
 // Ranged fire + volley gate + power-up decrement. Phase 7 fills this. Fire runs
 // only in NORMAL (CARRYING repurposes the input, VAULTING/DEAD can't act). No-op now.
@@ -362,18 +553,13 @@ function tryFire(p, snap, dt) { /* Phase 7 — ranged fire (§7) */ }
 // Player-shot motion / range / ricochet. Phase 7 (projectiles.js) fills this. No-op now.
 function updateShots(dt) { /* Phase 7 — projectiles.js (§8) */ }
 
-// Force-drop of a carried object (STUN, §5.2). Phase 6 owns the real drop
-// (settle the crate on the current tile, re-insert into G.crates+nav, press a
-// '_' under it). Phase-5 stub exits the CARRYING state so the status-forced
-// drop is correct-direction and observable (emits crate:dropped); the crate
-// LANDING is Phase 6. No-op when hands-free (the common Phase-5 case).
+// Force-drop of a carried crate (STUN, §5.2) — runs BEFORE move resolves
+// (updatePlayer step 2). Settles the crate in place on the player's current tile
+// (re-insert into G.crates + nav-dirty + press a '_' under it via dropCrateAtTile)
+// and returns to NORMAL. No-op when hands-free.
 function dropCarried(reason) {
   const p = G.player;
   if (!p.carry) return;
-  emit("crate:dropped", {
-    reason, x: p.x, y: p.y,
-    tx: (p.x / CFG.TILE) | 0, ty: (p.y / CFG.TILE) | 0,
-  });
-  p.carry = null;
+  dropCrateAtTile(p, (p.x / CFG.TILE) | 0, (p.y / CFG.TILE) | 0, reason);
   if (p.loco === "CARRYING") p.loco = "NORMAL";
 }

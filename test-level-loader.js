@@ -201,7 +201,9 @@ for (let iter = 0; iter < 25; iter++) {              // exercise the randomness
   for (const arr of [G.crates, G.barrels, G.spawners, G.pickups, G.enemies])
     for (const e of arr) {
       scatterCount++;
-      if (isWall(e.x, e.y) || map[e.y][e.x] === "_" || (e.x === 10 && e.y === 1))
+      // entity x,y are PIXELS (Phase-6 coord reconciliation) — derive the tile.
+      const tx = (e.x / CFG.TILE) | 0, ty = (e.y / CFG.TILE) | 0;
+      if (isWall(tx, ty) || map[ty][tx] === "_" || (tx === 10 && ty === 1))
         scatterLegal = false;
     }
 }
