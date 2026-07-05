@@ -1,9 +1,10 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (conversational session — spec + doc setup)
-**State in one line:** Greenfield. No game code yet. GDD v1.1 and the level
-loader+generator spec are complete and signed off. Ready for the first
-implementation session (subsystem #1: level loader + generator).
+**Last updated:** 2026-07-05 (Phase 3 — level-loader.js)
+**State in one line:** Foundation (config/state/world) + the level **loader**
+are built and tested; the level **generator** is the remaining half of
+subsystem #1. Everything a later subsystem owns is stubbed behind a
+register-callbacks seam (nav / entity factories / events).
 
 ## How to use this file
 
@@ -14,7 +15,7 @@ current or the next session starts blind.
 
 ## Build status (mirrors GDD build-status index — all NOT BUILT)
 
-- [ ] **§8 Level** — loader + generator, tile set, dark lighting, Night escalation   ← **NEXT**
+- [~] **§8 Level** — **loader DONE** (schema/validate/loadLevel/tile-state+links/spawn-rule placement); tile set, dark lighting done as stamps; **generator PENDING** ← **NEXT**
 - [ ] §2 Player — movement, health/overheal, melee, ranged, carry/vault states
 - [ ] §7 Interactive objects — crates, barrels, shrapnel, carry physics
 - [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying
@@ -24,7 +25,9 @@ current or the next session starts blind.
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
 - [ ] §9/§10/§11 Scoring, HUD, render/lighting, audio
 
-Repo currently contains: `LICENSE` only.
+Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`.
+Tests: `test-config.js`, `test-world.js`, `test-level-loader.js` (all green).
+Generator (`level-generator.js`) not yet built.
 
 ## Implementation sequencing (agreed order)
 
@@ -81,8 +84,42 @@ correct behavior since the resolver stub only ever returns a truthy state for
 actual door cells. Matches SPEC-LEVEL §7's flagged risk, resolved as
 prescribed.
 
-*(Still expected later: `level` ↔ `nav` and `level` ↔ entity factories, both
-via register-callbacks / one-way flow — see SPEC-LEVEL §7.)*
+### 2026-07-05 — `level-loader` ↔ `nav` (register-callbacks) — Phase 3
+Resolved as flagged (SPEC-LEVEL §6.1/§7). `level-loader.js` exposes
+`registerBlockerSink(sink)` and `markNavDirty(tile)`; the default sink is a
+no-op object `{registerBlocker(){}, markDirty(){}}`. The loader registers each
+movable entity (crate/barrel/spawner) as a blocker **at placement time**
+(§4.5 — folds the spec's step-7 pass in) and calls `markNavDirty` on every door
+open/close (recomputeDoor + openLockedDoor). `level-loader.js` never imports
+nav; nav registers itself as the sink at boot.
+
+### 2026-07-05 — `level-loader` ↔ entity factories (registry + placeholders) — Phase 3
+Resolved as flagged (SPEC-LEVEL §6.2/§6.3/§7). `registerEntityFactory(type,fn)`;
+the loader ships **placeholder** factories now (minimal inert
+`{type,x,y,tc,blocks}`; the `spawner` placeholder also carries `variant`, its
+`eligible(G.night)`-filtered enemy table, and ramped `interval`/`liveCap`).
+`level-loader.js` does **not** import `player.js`/`enemies.js` (they don't exist
+yet — a forward/circular hazard). **Owed by #2/#4:** real player/enemy/spawner
+factories that override the placeholders via `registerEntityFactory`. `player`
+and `exit` are handled inline (singletons on `G`), not via the registry.
+
+### 2026-07-05 — event emit routed through a seam (events.js not built) — Phase 3
+`loadLevel` step 9 emits `level:start`, but `events.js` is a later subsystem and
+importing it would break the config/state/world-only rule. Resolved with a
+register-callbacks seam: `registerEmit(fn)`, default no-op; the payload is a
+snapshot (one-way flow). **Owed:** `events.js` registers its `emit` when it
+lands. Keeps loader imports = config/state/world only (acceptance).
+
+### 2026-07-05 — RAMP snapshot hoisted before placements — Phase 3
+SPEC-LEVEL §4.1 numbers the `CFG.RAMP`→`G.ramp` snapshot as step 8 (after
+placements), but §6.3 requires spawner entities — created during placements
+(steps 5–6) — to read ramped `interval`/`liveCap` from `G.ramp`. Resolved by
+computing the snapshot immediately after the transient-clear (step 4), before
+placements. Still read **exactly once at load, never mid-level** (§8.6 upheld);
+only the intra-load ordering moved. Flagged here per "phases flag their own
+risks" — the spec's step numbering and §6.3 were in tension.
+
+*(Still expected later: real nav grid + entity modules fill the seams above.)*
 
 ## Known open items (non-blocking for build)
 
@@ -135,3 +172,36 @@ mechanical port of an existing constant, not new tuning, but worth a
 sign-off glance in case Repossessed wants a different tile size.
 
 Code map: `src/world.js` now exists.
+
+### 2026-07-05 — Phase 3 (`level-loader.js` — the loader)
+
+Built `src/level-loader.js` (19KB, one concern; under the 24KB smell) +
+`test-level-loader.js` (34 checks green, stable across repeated runs since it
+exercises `Math.random` scatter). Ported + extended from add2026 `src/level.js`
+(`loadLevel`/`validateLevelDef`/`pickTile`/`runSpawnRule`/`zonesWithRole`).
+
+Implements: Level Def v2 `validateLevelDef` (full §4.3 incl. ★links-ref-ids,
+★door/plate-on-matching-char [D3], ★avoid-role, ★spawner-variant-in-CFG,
+★script-actor no-op seam); the ordered `loadLevel` (§4.1) — validate → parse
+grid (no conveyor bake) → build tile-state+link graph (recompute once) → clear
+transient/preserve run-state → **ramp snapshot (hoisted, see Arch decisions)** →
+placements player-FIRST/exit/rest → spawn rules → emit; the mutable tile-state
+store `Map<ty*COLS+tx, DoorState|PlateState>` with `setPlatePressed`/
+`openLockedDoor`/`recomputeDoor` (pure, open-iff-any-linked-plate-pressed);
+extended spawn-rule placement (400-try + guaranteed-floor fallback, ★never on
+plate/exit, ★new types, movable→blocker). Registered the world.js
+tile-state resolver (returns door states only — plates fall through to the
+static non-solid flag). Ramp evaluation (§5.5 `clampToward`/tier) lives here
+because `loadLevel` owns the snapshot; the generator can reuse it.
+
+Tests cover SPEC-LEVEL §8 items **4** (scatter never on solid/plate/exit),
+**5** (11 validation rejects), **6** (link graph: press opens / release closes /
+two-plate either-opens, read black-box via `world.isWall` on the door tile),
+**8** (transient arrays cleared, run-state hp/keys/gems/score/night preserved),
+plus an import-discipline grep (config/state/world only).
+
+**No spec gaps requiring invented design.** Two spec-internal tensions were
+*resolved procedurally* (not design decisions) and logged under Architecture:
+the RAMP step-8-vs-§6.3 ordering, and the `events.js`-not-built emit path.
+Owed by later phases: real entity factories (#2/#4), nav sink (#3), events.js
+`emit` registration. Generator (`level-generator.js`) is the next build.
