@@ -5,6 +5,12 @@
    ========================================================================= */
 
 export const CFG = {
+  // Tile pixel size. Missing from Phase 1 (config/state foundation); required
+  // by world.js's geometry helpers (bodyHitsWall, tileCenter, hasLineOfSight,
+  // …). Ported verbatim from add2026 CFG.TILE — a fixed pixel constant, not a
+  // design decision. Flagged in STATUS.md as a Phase-1 spec gap.
+  TILE: 32,
+
   // LIVE world dims — set by the loader from each level's tile grid
   // (loadTileGrid). Declared here as metadata only (SPEC-LEVEL §2).
   COLS: 0,

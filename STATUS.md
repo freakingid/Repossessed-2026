@@ -71,9 +71,18 @@ light-emitter registry (#7), music registry. Fill seams, don't reach across.
 
 ## Architecture / circular-import decisions
 
-*(none yet — record here when they arise, per CLAUDE.md. Expected for #1:
-`level` ↔ `nav` and `level` ↔ entity factories, both resolved via
-register-callbacks / one-way flow — see SPEC-LEVEL §7.)*
+### 2026-07-05 — `world` ↔ `level-loader` (register-callbacks)
+`world.js` exposes `registerTileStateResolver(fn)`. `level-loader.js` (Phase 3)
+will register itself as the resolver at load time; `world.js` never imports
+`level-loader.js`. `isWall`/`blocksLOS` consult the resolver first for every
+cell (not just `d`/`D`) and fall back to the static `CFG.TILES` flag when no
+resolver is registered or the resolver returns a falsy state — this is the
+correct behavior since the resolver stub only ever returns a truthy state for
+actual door cells. Matches SPEC-LEVEL §7's flagged risk, resolved as
+prescribed.
+
+*(Still expected later: `level` ↔ `nav` and `level` ↔ entity factories, both
+via register-callbacks / one-way flow — see SPEC-LEVEL §7.)*
 
 ## Known open items (non-blocking for build)
 
@@ -99,3 +108,30 @@ the rest of the table follows (GDD §6.2 pts ÷ 50): Lobber = 100 pts → cost 2
 `config.js` at the `costs` table. Flagging here per CLAUDE.md's "surface,
 don't invent design" rule — this is a mechanical fill via an existing
 formula, not a new tuning decision, but worth a sign-off glance.
+
+### 2026-07-05 — Phase 2 (`world.js` — tile-grid primitives)
+
+Ported from add2026 `src/world.js`: `loadTileGrid`, `isWall`, `blocksLOS`,
+`tileCenter`, `randomFloorTileTC`, `randomFloorTile`, `tileFloor`,
+`bodyHitsWall`, `hasLineOfSight`. Added `registerTileStateResolver` seam
+(§3.2) — see *Architecture / circular-import decisions* above. Deleted (not
+stubbed): `bakeConveyors`, `isDestructible`, `destroyShelf`, `pushField`/
+`pushAt`/`pushAtWorld`/`applyBeltPush`/`clampNet` (all conveyor-only), and the
+Cleaner-patrol-only helpers not required by this phase's spec list
+(`tileClearRun`, `rectPerimeterClear`, `isBorderTile`, `moveBody`, `clamp`) —
+none were named in SPEC-LEVEL §3.1's reuse list; add back if a later phase's
+spec calls for them. `node test-world.js` green (28 checks), `node
+test-config.js` still green (11 checks). No import of `level-loader.js` from
+`world.js` (grep-verified).
+
+**Spec gap found (not invented around):** `CFG.TILE` (tile pixel size) was
+missing from Phase 1's `config.js` — every geometry helper ported in this
+phase (`bodyHitsWall`, `tileCenter`, `hasLineOfSight`, `randomFloorTile`)
+needs it. Not specified in SPEC-LEVEL or GDD excerpts read this session.
+Ported verbatim from add2026 `CFG.TILE: 32` (a fixed pixel constant, not a
+design decision) into `config.js`, commented at the point of addition.
+Flagging per CLAUDE.md's "surface, don't invent design" rule — this is a
+mechanical port of an existing constant, not new tuning, but worth a
+sign-off glance in case Repossessed wants a different tile size.
+
+Code map: `src/world.js` now exists.
