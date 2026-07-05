@@ -8,6 +8,7 @@
    level-loader circular import — see STATUS.md).
    ========================================================================= */
 import { CFG } from "./config.js";
+import { G } from "./state.js";
 
 // map[y][x] holds a TILE CHAR (key into CFG.TILES); "." floor, "#" wall, etc.
 // Reassigned only by loadTileGrid.
@@ -107,6 +108,40 @@ export function bodyHitsWall(x, y, r) {
     for (let tx = minX; tx <= maxX; tx++)
       if (isWall(tx, ty)) return true;
   return false;
+}
+
+// Dynamic-blocker check: does a body at (x,y,r) overlap a movable entity
+// (crate/barrel/spawner) the caller's filter accepts? Mechanism only — policy
+// (e.g. carry-state eligibility) is the caller's filter (§4.2 seam); world.js
+// never reads G.player or carry state itself. No filter ⇒ no dynamic blocker,
+// so terrain-only callers are unaffected.
+export function bodyHitsBlocker(x, y, r, filter) {
+  if (!filter) return false;
+  const rr = r + CFG.TILE / 2;
+  for (const arr of [G.crates, G.barrels, G.spawners]) {
+    if (!arr) continue;
+    for (const e of arr) {
+      if (!filter(e)) continue;
+      const dx = x - e.x, dy = y - e.y;
+      if (dx * dx + dy * dy < rr * rr) return true;
+    }
+  }
+  return false;
+}
+
+// Per-axis slide against two collision sources: the static/tile-state grid
+// (bodyHitsWall, already includes closed doors) and the dynamic movable-entity
+// set (bodyHitsBlocker, filtered by the caller's eligibility policy). Ported
+// from add2026 moveBody (deleted in Phase 2, re-added + extended here — §4.2).
+export function moveBody(b, dx, dy, blockerFilter) {
+  if (dx) {
+    b.x += dx;
+    if (bodyHitsWall(b.x, b.y, b.r) || bodyHitsBlocker(b.x, b.y, b.r, blockerFilter)) b.x -= dx;
+  }
+  if (dy) {
+    b.y += dy;
+    if (bodyHitsWall(b.x, b.y, b.r) || bodyHitsBlocker(b.x, b.y, b.r, blockerFilter)) b.y -= dy;
+  }
 }
 
 // Sample along the segment; blocked if any LOS-blocking tile lies between.

@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 1 — config data + powerups-key fix)
+**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 2 — world.js moveBody/bodyHitsBlocker)
 **State in one line:** **Subsystem #1 (Level loader + generator) is BUILT and
 tested headlessly.** Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -31,11 +31,13 @@ current or the next session starts blind.
 
 Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`,
 `level-plan.js` (generator content, pure fn of n, 6KB), `level-generator.js`
-(geometry/solvability/`generateLevel`, 27KB).
+(geometry/solvability/`generateLevel`, 27KB). `world.js` re-adds `moveBody`
+(2-source, filtered) + `bodyHitsBlocker`; now imports `state.js` (S4, no cycle).
 Tests: `test-config.js`, `test-world.js`, `test-level-loader.js`,
 `test-level-content.js`, `test-level-generator.js` (20 checks),
-`test-level-integration.js` (16 checks) — all green (188 checks total).
-Subsystem #1 complete; next is player + carry (#2).
+`test-level-integration.js` (16 checks) — all green (201 checks total).
+Subsystem #1 complete; player subsystem (#2) in progress (SPEC-PLAYER
+Phase 1 config data done; Phase 2 world.js collision seam done).
 
 ## Implementation sequencing (agreed order)
 
@@ -209,6 +211,23 @@ tile×32 conversions (`speed`=112, `range`=224, `vaultHop`=64). Full suite
 (config/world/level-loader/level-content/level-generator/level-integration)
 still green, 194 checks total — data-only change, no behavior/build-status
 box flipped.
+
+### 2026-07-05 — `world.js` re-adds `moveBody` (filter-as-policy seam, S2) — Phase 2 (SPEC-PLAYER)
+`moveBody` (deleted in the Level-loader Phase 2 as "not in §3.1's reuse list")
+is re-added, extended to **two** collision sources: the static/tile-state grid
+(`bodyHitsWall`, unchanged) and a new `bodyHitsBlocker(x,y,r,filter)` against
+`G.crates`/`G.barrels`/`G.spawners` (circle-vs-circle at `r + CFG.TILE/2`).
+`bodyHitsBlocker` is deliberately **policy-free**: it takes a `filter(entity)`
+predicate from the caller rather than reading carry state itself — the caller
+(player.js, later) decides eligibility (e.g. "not the crate I'm carrying").
+An omitted filter is always "no block," so existing terrain-only callers are
+unaffected. `world.js` now imports `state.js` for `G` (S4) — still a one-way
+leaf import, no cycle (state.js imports nothing); `world.js` still must not,
+and does not, import `level-loader.js` (grep-verified, now also asserting
+world.js imports only config.js/state.js). `node test-world.js` green (28 → 35
+checks): per-axis wall slide at a corner, `bodyHitsBlocker` filter true/false/
+undefined, and `moveBody` reverting vs. passing through a synthetic crate by
+filter. Full suite still green, 201 checks total.
 
 *(Still expected later: real nav grid + entity modules fill the seams above.)*
 
@@ -414,3 +433,26 @@ flagged in the phase prompt) was resolved procedurally per the given ruling
 Owed by later phases: real `player.js`/`input.js`/`projectiles.js` builds
 consuming this data; `CFG.KEYS.gamepad` indices (§4.1) left stubbed pending
 either `input.js`'s build or a fuller spec excerpt.
+
+### 2026-07-05 — SPEC-PLAYER Phase 2 (`world.js` — moveBody + bodyHitsBlocker)
+
+Re-added `moveBody` (deleted in Level-loader Phase 2) to `world.js`, extended
+to two collision sources per §4.2's amendment, and added `bodyHitsBlocker` as
+a new policy-free mechanism (filter supplied by the caller — S2 seam). See
+Architecture decisions above for the full rationale. `world.js` now imports
+`state.js` (S4) in addition to `config.js`; still leaf-only, still no import
+of `level-loader.js` (grep-verified both facts).
+
+Extended `test-world.js` (28 → 35 checks): a genuine per-axis wall-corner
+slide (verified the body actually diverts, not a vacuous same-position pass),
+`bodyHitsBlocker` filter-true/filter-false/no-filter cases against a synthetic
+`G.spawners` entry, `moveBody` reverting into vs. passing through a synthetic
+`G.crates` entry by filter, and an import-discipline grep asserting `world.js`
+imports only `./config.js` and `./state.js`. Full suite green, 201 checks
+total (config 17 / world 35 / level-loader 34 / level-content 79 /
+level-generator 20 / level-integration 16).
+
+**No spec gaps requiring invented design.** `bodyHitsBlocker` was built
+exactly as scoped in the phase prompt — mechanism only, no reach into
+`G.player`/carry state. Owed by later phases: `player.js` supplies the actual
+`blockerFilter` (carry-state eligibility) when it lands.

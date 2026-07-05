@@ -1,7 +1,9 @@
 // test-world.js — headless smoke test, no canvas (CLAUDE.md convention).
 import { CFG } from "./src/config.js";
+import { G } from "./src/state.js";
 import {
   loadTileGrid, isWall, blocksLOS, registerTileStateResolver,
+  moveBody, bodyHitsBlocker,
 } from "./src/world.js";
 
 let passed = 0, failed = 0;
@@ -73,10 +75,58 @@ throws("loadTileGrid throws on unknown tile char", () => {
   loadTileGrid(["####", "#Z.#", "####"]);
 });
 
+// --- moveBody: per-axis slide against walls ------------------------------
+loadTileGrid([
+  "#######",
+  "#.....#",
+  "#.##..#",
+  "#.....#",
+  "#######",
+]);
+{
+  // Diagonal step into the L-corner at (2,2)/(2,1)-(1,2) walls: moving
+  // toward (2,2) from (1,1)-ish should slide along the free axis, not pass
+  // through the corner.
+  const b = { x: 1.5 * CFG.TILE, y: 1.5 * CFG.TILE, r: 8 };
+  const startX = b.x, startY = b.y;
+  moveBody(b, CFG.TILE, CFG.TILE); // toward the wall block at tx=2,ty=2 and tx=2,ty=1(open)/tx=1,ty=2(open)
+  check("moveBody slides along one axis at a wall corner (doesn't pass through)",
+    (b.x !== startX + CFG.TILE) || (b.y !== startY + CFG.TILE));
+}
+
+// --- bodyHitsBlocker: synthetic G.spawners, filter policy ----------------
+G.spawners = [{ x: 3.5 * CFG.TILE, y: 1.5 * CFG.TILE }];
+G.crates = []; G.barrels = [];
+check("bodyHitsBlocker: overlapping spawner blocked when filter accepts",
+  bodyHitsBlocker(3.5 * CFG.TILE, 1.5 * CFG.TILE, 8, () => true));
+check("bodyHitsBlocker: overlapping spawner NOT blocked when filter rejects",
+  !bodyHitsBlocker(3.5 * CFG.TILE, 1.5 * CFG.TILE, 8, () => false));
+check("bodyHitsBlocker: no filter ⇒ never blocked",
+  !bodyHitsBlocker(3.5 * CFG.TILE, 1.5 * CFG.TILE, 8, undefined));
+
+// --- moveBody with a blockerFilter matching a crate at a tile -------------
+G.crates = [{ x: 2.5 * CFG.TILE, y: 1.5 * CFG.TILE }];
+{
+  const b = { x: 1.5 * CFG.TILE, y: 1.5 * CFG.TILE, r: 8 };
+  moveBody(b, CFG.TILE, 0, () => true);
+  check("moveBody reverts into a crate tile when filter matches",
+    b.x === 1.5 * CFG.TILE);
+
+  const b2 = { x: 1.5 * CFG.TILE, y: 1.5 * CFG.TILE, r: 8 };
+  moveBody(b2, CFG.TILE, 0, () => false);
+  check("moveBody passes through when filter rejects the crate",
+    b2.x === 2.5 * CFG.TILE);
+}
+G.crates = []; G.barrels = []; G.spawners = [];
+
 // --- world.js must not import level-loader.js ----------------------------
 import { readFileSync } from "node:fs";
 const src = readFileSync(new URL("./src/world.js", import.meta.url), "utf8");
 check("world.js does not import level-loader.js", !/from\s+["'].*level-loader\.js["']/.test(src));
+check("world.js imports only config.js and state.js", (() => {
+  const imports = [...src.matchAll(/from\s+["'](.+?)["']/g)].map(m => m[1]);
+  return imports.every(p => p === "./config.js" || p === "./state.js");
+})());
 
 // --- conveyor/destructible symbols are gone ------------------------------
 check("world.js has no bakeConveyors", !/bakeConveyors/.test(src));
