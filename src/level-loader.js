@@ -189,17 +189,23 @@ function buildTileState(def) {
    clampToward clamps toward the limit regardless of step sign (some steps are
    negative, e.g. lobberErrorRadius).
    ========================================================================= */
-function rampValue(param, tier) {
+export function rampValue(param, tier) {
   const raw = param.mode === "mul"
     ? param.base * Math.pow(param.step, tier)
     : param.base + param.step * tier;
   return param.base <= param.limit ? Math.min(raw, param.limit) : Math.max(raw, param.limit);
 }
-function snapshotRamp(n) {
+// Pure eval of the full CFG.RAMP table for Night n — shared with
+// level-generator.js's evalRamp so there is one implementation of §5.5, not
+// two. Exported; does not itself touch G (snapshotRamp below does that).
+export function evalRampTable(n) {
   const tier = Math.floor((n - 1) / 8);
   const out = {};
   for (const [k, param] of Object.entries(CFG.RAMP)) out[k] = rampValue(param, tier);
-  G.ramp = out;
+  return out;
+}
+function snapshotRamp(n) {
+  G.ramp = evalRampTable(n);
 }
 
 /* =========================================================================

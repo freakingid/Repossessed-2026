@@ -1,10 +1,12 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (Phase 3 — level-loader.js)
+**Last updated:** 2026-07-05 (Phase 4 — level-generator.js content evaluators)
 **State in one line:** Foundation (config/state/world) + the level **loader**
-are built and tested; the level **generator** is the remaining half of
-subsystem #1. Everything a later subsystem owns is stubbed behind a
-register-callbacks seam (nav / entity factories / events).
+are built and tested; the generator's **content half** (eligible/budget/
+roster/evalRamp, pure fn of n) is now built — **geometry/placement/
+solvability** (`generateLevel(n, rng)`) is the remaining half of subsystem #1.
+Everything a later subsystem owns is stubbed behind a register-callbacks seam
+(nav / entity factories / events).
 
 ## How to use this file
 
@@ -15,7 +17,7 @@ current or the next session starts blind.
 
 ## Build status (mirrors GDD build-status index — all NOT BUILT)
 
-- [~] **§8 Level** — **loader DONE** (schema/validate/loadLevel/tile-state+links/spawn-rule placement); tile set, dark lighting done as stamps; **generator PENDING** ← **NEXT**
+- [~] **§8 Level** — **loader DONE** (schema/validate/loadLevel/tile-state+links/spawn-rule placement); tile set, dark lighting done as stamps; generator **content evaluators DONE** (eligible/budget/roster/evalRamp, pure fn of n); **generator geometry/placement/solvability PENDING** ← **NEXT**
 - [ ] §2 Player — movement, health/overheal, melee, ranged, carry/vault states
 - [ ] §7 Interactive objects — crates, barrels, shrapnel, carry physics
 - [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying
@@ -25,9 +27,12 @@ current or the next session starts blind.
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
 - [ ] §9/§10/§11 Scoring, HUD, render/lighting, audio
 
-Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`.
-Tests: `test-config.js`, `test-world.js`, `test-level-loader.js` (all green).
-Generator (`level-generator.js`) not yet built.
+Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`,
+`level-generator.js` (content evaluators only, 6KB).
+Tests: `test-config.js`, `test-world.js`, `test-level-loader.js`,
+`test-level-content.js` (all green, 79 checks in the new file).
+Generator geometry/archetypes/solvability (§5.3/§5.4, `generateLevel(n, rng)`)
+not yet built.
 
 ## Implementation sequencing (agreed order)
 
@@ -119,6 +124,22 @@ placements. Still read **exactly once at load, never mid-level** (§8.6 upheld);
 only the intra-load ordering moved. Flagged here per "phases flag their own
 risks" — the spec's step numbering and §6.3 were in tension.
 
+### 2026-07-05 — `level-loader` ↔ `level-generator` (shared pure ramp eval) — Phase 4
+Phase 3 already implemented `CFG.RAMP` evaluation (`clampToward`/tier) inside
+`level-loader.js`, private, because `loadLevel` owns the once-at-load `G.ramp`
+snapshot (§4.1 step 8). Phase 4's spec calls for an `evalRamp(n)` in
+`level-generator.js`. Rather than reimplement `clampToward`/tier a second time
+(two divergent copies of §5.5 would be a correctness hazard), the private
+`rampValue`/`snapshotRamp` in `level-loader.js` were split: `rampValue` is now
+exported, and a new exported `evalRampTable(n)` (pure — returns the table, does
+not touch `G`) is the single implementation. `level-loader.js`'s internal
+`snapshotRamp(n)` now calls `evalRampTable(n)` and assigns to `G.ramp`;
+`level-generator.js`'s `evalRamp(n)` calls the same `evalRampTable` and returns
+it without touching `G`. This is a one-way import
+(`level-generator.js` → `level-loader.js`), not a cycle — the loader still
+never imports the generator. Not a design decision, a mechanical de-dup;
+flagged per "phases flag their own risks."
+
 *(Still expected later: real nav grid + entity modules fill the seams above.)*
 
 ## Known open items (non-blocking for build)
@@ -205,3 +226,40 @@ plus an import-discipline grep (config/state/world only).
 the RAMP step-8-vs-§6.3 ordering, and the `events.js`-not-built emit path.
 Owed by later phases: real entity factories (#2/#4), nav sink (#3), events.js
 `emit` registration. Generator (`level-generator.js`) is the next build.
+
+### 2026-07-05 — Phase 4 (`level-generator.js` — content evaluators)
+
+Built `src/level-generator.js` (6KB, one concern — content only) +
+`test-level-content.js` (79 checks green). Pure functions of `n`, **no `rng`
+parameter touched anywhere in this file** (grep-confirmed: no `Math.random`,
+no `Date`, no `rng` outside comments).
+
+Implements: `eligible(n)` (union of `CFG.PLAN.introductions.elements` gated by
+`night <= n`); `budget(n)` (`min(base + perNight*(n-1), cap)`); `buildRoster(n)`
+— the abstract, budget-resolved composition (`{element, asSpawner}` list +
+Reaper set-piece flag, `n>=9`, cost 15, at most one) via the newest-tier /
+earlier-mix weighting split (§5.2) — **no zone placement, no coordinates**
+(Phase 5's job); `eligibleSpawnerTable(variant, n)` (a spawner's enemy table
+intersected with `eligible(n)`, for #4's pre-filtered read); `evalRamp(n)` (the
+`G.ramp`-shaped snapshot object, delegating to `level-loader.js`'s shared
+`evalRampTable` — see Architecture decisions above for why this isn't a second
+implementation of §5.5).
+
+Tests cover SPEC-LEVEL §8 items **3** (content purity — budget/eligible/roster
+identical across repeated calls, asserted as pure-fn-of-n since this layer has
+no seed at all) and **9** (RAMP eval — 8-Night tiers, `add`/`mul` modes, clamp
+toward limit for both positive and negative steps, verified with
+`lobberErrorRadius` as the negative-step case per the spec's own example);
+plus the budget-curve formula/cap, the Night-2-vs-3 `skeletonShooter` gate, and
+a wide-`n` sweep (1..200) asserting no RAMP value ever exceeds its clamp
+bound in either direction.
+
+**No spec gaps requiring invented design.** One spec-internal tension was
+resolved procedurally (not a design decision) and logged under Architecture:
+the phase prompt's `evalRamp(n)` vs. Phase 3's already-built private ramp
+logic in `level-loader.js` — resolved by exporting/sharing rather than
+duplicating. `node test-config.js`, `test-world.js`, `test-level-loader.js`,
+and `test-level-content.js` all still green after the export change (no
+behavior change to the loader's `snapshotRamp`, confirmed by the still-green
+`test-level-loader.js`). Geometry/archetypes/solvability
+(`generateLevel(n, rng)`, SPEC-LEVEL §5.3/§5.4) is the next build.
