@@ -1,12 +1,14 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (Phase 4 — level-generator.js content evaluators)
-**State in one line:** Foundation (config/state/world) + the level **loader**
-are built and tested; the generator's **content half** (eligible/budget/
-roster/evalRamp, pure fn of n) is now built — **geometry/placement/
-solvability** (`generateLevel(n, rng)`) is the remaining half of subsystem #1.
+**Last updated:** 2026-07-05 (Phase 5 — level-generator.js geometry/solvability)
+**State in one line:** **Subsystem #1 (Level loader + generator) is BUILT and
+tested headlessly.** Foundation (config/state/world) + the **loader** + the
+generator's **content half** (`level-plan.js`) + the generator's
+**geometry/solvability/assembly half** (`generateLevel(n, rng)` in
+`level-generator.js`) are all done; `generateLevel` always returns a loadable,
+solvable def (4 archetypes, §5.4 solvability + arena fallback, Q3 dark guard).
 Everything a later subsystem owns is stubbed behind a register-callbacks seam
-(nav / entity factories / events).
+(nav / entity factories / events / light / music).
 
 ## How to use this file
 
@@ -17,7 +19,7 @@ current or the next session starts blind.
 
 ## Build status (mirrors GDD build-status index — all NOT BUILT)
 
-- [~] **§8 Level** — **loader DONE** (schema/validate/loadLevel/tile-state+links/spawn-rule placement); tile set, dark lighting done as stamps; generator **content evaluators DONE** (eligible/budget/roster/evalRamp, pure fn of n); **generator geometry/placement/solvability PENDING** ← **NEXT**
+- [x] **§8 Level** — **BUILT.** Loader DONE (schema/validate/loadLevel/tile-state+links/spawn-rule placement; tile set + dark stamps). Generator content DONE (`level-plan.js`: eligible/budget/roster/evalRamp, pure fn of n). Generator geometry/solvability/assembly DONE (`level-generator.js`: 4 archetypes, roster→spawnRules+placements, §5.4 solvability + arena fallback, Q3 `G._prevDark` guard, music-key stamping). Owed by later subsystems: real entity factories (#2/#4), nav sink (#3), events emit (#11), light (#7), MUSIC registry (#11.3).
 - [ ] §2 Player — movement, health/overheal, melee, ranged, carry/vault states
 - [ ] §7 Interactive objects — crates, barrels, shrapnel, carry physics
 - [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying
@@ -28,11 +30,12 @@ current or the next session starts blind.
 - [ ] §9/§10/§11 Scoring, HUD, render/lighting, audio
 
 Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`,
-`level-generator.js` (content evaluators only, 6KB).
+`level-plan.js` (generator content, pure fn of n, 6KB), `level-generator.js`
+(geometry/solvability/`generateLevel`, 27KB).
 Tests: `test-config.js`, `test-world.js`, `test-level-loader.js`,
-`test-level-content.js` (all green, 79 checks in the new file).
-Generator geometry/archetypes/solvability (§5.3/§5.4, `generateLevel(n, rng)`)
-not yet built.
+`test-level-content.js`, `test-level-generator.js` (20 checks),
+`test-level-integration.js` (16 checks) — all green (188 checks total).
+Subsystem #1 complete; next is player + carry (#2).
 
 ## Implementation sequencing (agreed order)
 
@@ -139,6 +142,45 @@ it without touching `G`. This is a one-way import
 (`level-generator.js` → `level-loader.js`), not a cycle — the loader still
 never imports the generator. Not a design decision, a mechanical de-dup;
 flagged per "phases flag their own risks."
+
+### 2026-07-05 — content/geometry file split (`level-plan.js` + `level-generator.js`) — Phase 5
+Adding geometry + solvability + assembly pushed `level-generator.js` past the
+24KB file-size smell (SPEC-LEVEL §7 anticipated this). Split on the spec-named
+seam: **content** (pure fn of `n` — `eligible`/`budget`/`buildRoster`/
+`eligibleSpawnerTable`/`evalRamp`) moved verbatim to **`level-plan.js`**;
+**geometry** (`generateLevel(n, rng)`, four archetypes, solvability, fallback)
+stays in **`level-generator.js`**. Import chain is one-way, no cycle:
+`level-generator.js` → `level-plan.js` → `level-loader.js` → {config,state,world};
+the generator also imports config/state directly. `evalRampTable` is still the
+single §5.5 implementation (in the loader; plan delegates). `test-level-content.js`
+now imports from `level-plan.js`. `level-generator.js` is ~27KB — over the 24KB
+smell but genuinely one concern (generating one level: shape → place → prove
+solvable → assemble); `isSolvable` is a candidate future split (pure grid→bool,
+~4KB) if it needs isolated reuse, left inline for now so the retry/solvability/
+assembly loop reads in one place.
+
+### 2026-07-05 — generator is data-only; single G field is `G._prevDark` — Phase 5
+`generateLevel` never writes a G entity array (the loader is the sole
+world-builder). The **only** G field it touches is the unsaved Q3 dark guard
+`G._prevDark` (read in `pickDark`, set after generating; not serialized —
+resume starts `false`). Enforced by a source grep in `test-level-generator.js`
+(`\bG\.\w+` must all be `G._prevDark`). Determinism (§8.2) therefore depends on
+seed **and** `G._prevDark`; the determinism tests reset `G._prevDark=false`
+before each compared call (seed + G state are the inputs).
+
+### 2026-07-05 — loose enemies as forward-compatible placements — Phase 5
+Early-Night rosters contain enemies whose spawner variant is not yet unlocked
+(e.g. a Night-1 skeleton — Bone Pile unlocks Night 2; a ghost — Grave Mound
+unlocks Night 6). Those are emitted as **fixed placements of type = the element
+name** (`{type:"ghost",…}`). The loader has no factory for them yet, so
+`placeEntity` returns null and they are silently ignored (the "unknown type
+ignored" forward-compat branch), while solvability still flood-checks their
+tiles as reachable. **Owed by #6 (enemies):** register real loose-enemy
+factories via `registerEntityFactory` — the defs already carry the placements.
+Note: the Phase-4 `buildRoster` weighting is degenerate (repeatedly picks the
+cheapest affordable element ⇒ rosters skew all-`ghost`); that is signed-off
+content behavior and Q5 (§14.2) tuning, not a generator bug — the generator
+places whatever roster it is handed.
 
 *(Still expected later: real nav grid + entity modules fill the seams above.)*
 
@@ -263,3 +305,63 @@ and `test-level-content.js` all still green after the export change (no
 behavior change to the loader's `snapshotRamp`, confirmed by the still-green
 `test-level-loader.js`). Geometry/archetypes/solvability
 (`generateLevel(n, rng)`, SPEC-LEVEL §5.3/§5.4) is the next build.
+
+### 2026-07-05 — Phase 5 (`level-generator.js` — geometry / solvability / assembly)
+
+Built the rng-driven half + the top-level entry `generateLevel(n, rng)`,
+splitting Phase-4 content out to `level-plan.js` first (file-size seam — see
+Architecture decisions). **Subsystem #1 is now complete.** Two test files:
+`test-level-generator.js` (20 checks) + `test-level-integration.js` (16 checks),
+all green; full suite 188 checks.
+
+Implements (SPEC-LEVEL §5.3/§5.4):
+- **RNG (D2):** `makeRng(seed)` mulberry32 → float[0,1); exported for tests
+  (fixed seed) and production (fresh seed). No seed persisted anywhere.
+- **Footprint:** interpolates `CFG.GEN.footprintMin`→`footprintMax` over
+  `footprintGrowNights`, then caps (all `CFG.GEN` dials).
+- **Four archetypes**, connectivity by construction: `arena` (rejection-sampled
+  isolated `o`/`T` obstacles with clearance), `warrens` (randomized-DFS maze on
+  a pitch-3 / 2-tile-corridor cell grid + loop-knock), `halls` (BSP leaves,
+  sibling-center corridors, optional `d`/`D` door alcoves), `ring` (solid core,
+  ≥2-wide loop, carved spoke chords).
+- **Door set pieces (halls):** built as **isolated pocket alcoves** carved out
+  of solid space — a pocket reachable ONLY through the one door cell. This makes
+  a door provably never on the player→exit path (closing/locking it can only
+  isolate the pocket reward), which is what keeps them solvable *by
+  construction*. `d` gets door+plate+link+crate; `D` is a pure key-driven tile
+  (D3 — no id/link) with a pre-door key + treasure reward.
+- **Roster → placements (§5.2):** `buildRoster(n)` (pure) → per-eligible-variant
+  spawner `spawnRules` (zone `danger`/`combat`, `avoid:"spawn"`; count collapsed
+  by `spawnerPickDivisor`, capped) + bounded fixed loose-enemy / Reaper
+  placements on reachable main floor.
+- **`props.dark`** from `CFG.PLAN.darkProb` (`n >= beforeNight`, `prob`) with the
+  Q3 `G._prevDark` guard (never two consecutive; set-after, unsaved).
+  **`props.music`** stamped from the `CFG.GEN.music` archetype pool (§6.5 key
+  only).
+- **Solvability (`isSolvable`, exported):** iterative flood-fill — a closed
+  plate-door is passable once a crate AND its linked plate are reachable; a
+  locked door once a key is reachable. check1 exit+every-placement reachable;
+  check2 every `D` key reachable in the base (door-closed) flood; check3 every
+  `d` has crate+plate reachable in the base flood.
+- **Fallback (§5.4):** re-roll geometry with a fresh sub-rng up to
+  `CFG.GEN.maxAttempts`; else emit a guaranteed-open `arena` (no doors,
+  `props.fallback:true`) + `console.warn`. Exercised by the injected-failure
+  test via the `__setCandidateOverride` seam. `generateLevel` therefore always
+  returns a loadable, solvable def.
+
+Tests cover §8 items **1** (generator→loader accepts; dims track CFG.COLS/ROWS),
+**2** (determinism under fixed seed, differs by seed), **7** (solvability sweep
+132 defs; isSolvable rejects a sealed exit as a non-vacuous control; fallback
+triggers + is valid under forced failure), a re-assert of **3** (roster pure fn
+of n across seeds while layout differs), and re-asserts of **6**/**8**
+end-to-end through generated defs (plate-door link graph opens/closes; run-state
+preserved / transients cleared). Plus footprint min/cap, archetype variety, the
+dark no-consecutive + before-`beforeNight` guards, and the data-only grep (only
+`G._prevDark`).
+
+**No spec gaps requiring invented design.** Decisions surfaced & logged under
+Architecture: the content/geometry file split; data-only + `G._prevDark`
+determinism dependency; loose enemies as forward-compatible placements (owed by
+#6). Proposed `CFG.GEN`/`CFG.PLAN` numbers (Q1/Q4/Q5) left as dials, not
+blockers. Seams for #2 (plate/key setters), #3 (nav sink), #4 (spawner tick),
+#7 (light) and #11.3 (MUSIC) confirmed in place (loader-side, unchanged).

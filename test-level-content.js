@@ -1,14 +1,17 @@
 /* test-level-content.js — headless smoke tests for the §8 content evaluators
    (SPEC-LEVEL items 3/9: eligible/budget/roster purity, RAMP eval).
 
-   Exercises the REAL modules (config/level-loader/level-generator), not
-   inlined copies. No browser-global stubs needed — this layer touches no
+   Exercises the REAL modules (config/level-loader/level-plan), not inlined
+   copies. No browser-global stubs needed — this layer touches no
    canvas/audio/document. Run: node test-level-content.js
+
+   (Content moved to level-plan.js at Phase 5 — the geometry/solvability half
+   grew level-generator.js past the file-size seam; see STATUS.md.)
 */
 import { CFG } from "./src/config.js";
 import {
   eligible, budget, buildRoster, evalRamp,
-} from "./src/level-generator.js";
+} from "./src/level-plan.js";
 
 let passed = 0, failed = 0;
 function check(name, ok) {

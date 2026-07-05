@@ -84,10 +84,48 @@ export const CFG = {
     cauldron:   { name: "Cauldron",     table: { lobber: 1.00 },                             interval: 5.0, liveCap: 4 },
   },
 
-  // Generator dials (SPEC-LEVEL §5.3/§5.4, proposed).
+  // Generator dials (SPEC-LEVEL §5.3/§5.4, all (proposed) §14.2 — Q5 tuning,
+  // not blockers). Geometry/placement reads these; never hardcode.
   GEN: {
-    maxAttempts: 8,
-    footprintMin: [24, 26],
-    footprintMax: [30, 34],
+    maxAttempts: 8,                    // solvability re-rolls before arena fallback (§5.4)
+    footprintMin: [24, 26],            // [cols, rows] at n=1
+    footprintMax: [30, 34],            // [cols, rows] cap
+    footprintGrowNights: 12,           // nights to interpolate min→max over (then cap)
+
+    // arena: single-tile o/T obstacles at this density of interior area, each
+    // kept isolated by a clearance radius so they can never seal a region.
+    arenaClusterDensity: 0.05,
+    arenaClearance: 2,
+
+    // warrens: 2-tile corridors on a pitch-3 cell grid; knock this fraction of
+    // cell-count extra walls to add flanking loops (a perfect maze reads badly).
+    warrensCorridorW: 2,
+    warrensLoopFactor: 0.15,
+
+    // halls: BSP leaves; corridors this wide connect sibling room centers.
+    hallsMinLeaf: 6,
+    hallsMaxDepth: 4,
+    hallsCorridorW: 2,
+
+    // ring: solid centered core, perimeter loop this wide, one horizontal spoke
+    // always + a vertical spoke at this chance (spokes are carved chords, they
+    // add routes, never cut the loop).
+    ringLoopWidth: 2,
+    ringSpokeChance: 0.5,
+
+    // roster → spawnRules: collapse this many same-variant roster picks into one
+    // extra spawner source, capped; loose (spawner-less) enemies capped per level.
+    spawnerPickDivisor: 8,
+    maxSpawnersPerVariant: 3,
+    maxLoosePerLevel: 14,
+
+    // props.music (§6.5 seam): archetype→track-pool key. The MUSIC registry
+    // (#11.3) resolves these keys synth→ogg later; the generator only stamps.
+    music: {
+      arena:   ["battle_a", "battle_b"],
+      warrens: ["skulk_a"],
+      halls:   ["gothic_a"],
+      ring:    ["siege_a"],
+    },
   },
 };

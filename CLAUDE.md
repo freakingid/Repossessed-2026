@@ -86,7 +86,8 @@ src/
   state.js         // G (global game state); small pure helpers.
   world.js         // tile-grid primitives: parse, isWall/blocksLOS, tileCenter, floor finders.
   level-loader.js  // Level Definition schema, loadLevel, validate, spawn-rule placement, tile-state.  (SPEC-LEVEL)
-  level-generator.js // endless generator: archetypes, PLAN/RAMP eval, solvability.                    (SPEC-LEVEL)
+  level-plan.js    // generator CONTENT (pure fn of n): eligible/budget/roster/evalRamp.                (SPEC-LEVEL)
+  level-generator.js // generator GEOMETRY: generateLevel(n,rng), 4 archetypes, solvability, fallback.  (SPEC-LEVEL)
   player.js        // movement, health/overheal, melee/ranged, carry/vault states.
   enemies.js       // enemy entities + roster;  enemies-ai.js / nav.js for steering + A*.
   projectiles.js   // shots, arrows, shrapnel; ricochet rules.
