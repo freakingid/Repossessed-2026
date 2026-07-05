@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 3 — level-loader.js coord-keyed plate press + emit export)
+**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 4 — input.js device read, mode-lock FSM, deriveSnapshot)
 **State in one line:** **Subsystem #1 (Level loader + generator) is BUILT and
 tested headlessly.** Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -31,13 +31,16 @@ current or the next session starts blind.
 
 Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`,
 `level-plan.js` (generator content, pure fn of n, 6KB), `level-generator.js`
-(geometry/solvability/`generateLevel`, 27KB). `world.js` re-adds `moveBody`
+(geometry/solvability/`generateLevel`, 27KB), `input.js` (device read,
+mode-lock FSM, `deriveSnapshot`, new). `world.js` re-adds `moveBody`
 (2-source, filtered) + `bodyHitsBlocker`; now imports `state.js` (S4, no cycle).
 Tests: `test-config.js`, `test-world.js`, `test-level-loader.js`,
 `test-level-content.js`, `test-level-generator.js` (20 checks),
-`test-level-integration.js` (16 checks) — all green (201 checks total).
-Subsystem #1 complete; player subsystem (#2) in progress (SPEC-PLAYER
-Phase 1 config data done; Phase 2 world.js collision seam done).
+`test-level-integration.js` (16 checks), `test-input.js` (19 checks) — all
+green (226 checks total). Subsystem #1 complete; player subsystem (#2) in
+progress (SPEC-PLAYER Phase 1 config data done; Phase 2 world.js collision
+seam done; Phase 3 level-loader.js coord-keyed plate press + emit export
+done; Phase 4 input.js done).
 
 ## Implementation sequencing (agreed order)
 
@@ -479,3 +482,53 @@ config/state/world (unchanged, no new imports needed for either addition).
 **No spec gaps requiring invented design.** Both additions were exactly the
 seams flagged as owed (SPEC-LEVEL §4.3 delegated coord setter; §10 emit
 export).
+
+### 2026-07-05 — SPEC-PLAYER Phase 4 (`input.js` — device read, mode-lock FSM, `deriveSnapshot`)
+
+Built `src/input.js` (new file) + `test-input.js` (19 checks green). Imports
+**only** `config.js`/`state.js` (grep-verified in this session; no gameplay
+import). `player.js` (later) will import this module's `getSnapshot`/
+`deriveSnapshot`; `input.js` never imports `player.js` (one-way flow, §11 risk
+resolved as flagged).
+
+Implements (SPEC-PLAYER §3): `deriveSnapshot(rawState, mode)` — the pure,
+fully headless-testable core (no `document`/`window`/`performance` reads
+inside it); keyboard diagonal move normalized to unit length (two-adjacent-
+key sum, ADD §4.1 rule); gamepad move full-speed beyond `CFG.KEYS.deadzone`
+regardless of stick depth (ADD §4.6); aim **always present** in both modes
+(keyboard: cursor-relative unit vector from a caller-supplied
+`{cursorWorld, playerPos}`; gamepad: right-stick unit vector, defaults to
+`{x:1,y:0}` inside the deadzone) — the documented divergence from ADD's
+`getFireAngle()`-returns-null; `fireHeld` is a separate boolean (LMB / right-
+stick-beyond-deadzone). Mode-lock FSM (`lockInputMode`/`clearInputMode`/
+`handleTitleDeviceEvent`) is a small explicit state on `G.inputMode`,
+testable without real devices. `setKeybinds(map)` is the remap seam (#6 UI
+not built). Device-listener glue (`installDeviceListeners`, `pollGamepad`,
+internal `rawState`) is thin and isolated from `deriveSnapshot`; it is the
+one browser-coupled, minimally-tested part.
+
+**Decisions made, not in the fetched spec excerpt, flagged here (mechanical
+fills, not invented design):**
+- **`rawState` shape** wasn't specified beyond "device events set an internal
+  raw-state." Chose `{keys:Set<KeyboardEvent.code>, cursorWorld:{x,y},
+  playerPos:{x,y}, mouseDown, gamepad:{axes,buttons}}` — `cursorWorld`/
+  `playerPos` are pre-resolved to world space by the caller (via new
+  `setCamera`/`setPlayerPos` setters) so `deriveSnapshot` stays pure and
+  never touches `G.player`/camera state itself (one-way boundary, §11).
+- **`CFG.KEYS.gamepad` button/axis indices** are still an empty stub (owed
+  since Phase 1 — §4.1's full table wasn't in the fetched excerpt). This
+  phase's gamepad move/aim/fireHeld read fixed ADD-convention axis indices
+  (`axes[0..1]` move, `axes[2..3]` aim) since those aren't remappable per
+  spec; **button** binds (nova/lightning/pause/confirm/back/mute) read
+  `CFG.KEYS.gamepad.<action>` and safely no-op (`padHeld` treats a missing
+  index as unpressed) until that table is filled in — owed to whichever
+  later phase has the full §4.1 button-index table (title-screen/pause UI,
+  #6, or a spec addendum).
+- **Idle gamepad aim defaults to `{x:1,y:0}`** (facing +x) rather than
+  holding the last known direction, to keep `deriveSnapshot` a pure function
+  of its arguments (no held-state inside the pure core). If play-feel wants
+  "hold last aim" instead, that's a `player.js`-side concern (it already
+  owns `G.player.angle` persistence per §2's data shape), not this seam.
+
+Full suite green, 226 checks total (config 17 / world 35 / level-loader 40 /
+level-content 79 / level-generator 20 / level-integration 16 / input 19).
