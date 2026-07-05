@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 4 — input.js device read, mode-lock FSM, deriveSnapshot)
+**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 5 — player.js core: frame-ordering skeleton, locomotion, overlays, world hooks, damage/heal/knockback sinks)
 **State in one line:** **Subsystem #1 (Level loader + generator) is BUILT and
 tested headlessly.** Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -20,7 +20,15 @@ current or the next session starts blind.
 ## Build status (mirrors GDD build-status index — all NOT BUILT)
 
 - [x] **§8 Level** — **BUILT.** Loader DONE (schema/validate/loadLevel/tile-state+links/spawn-rule placement; tile set + dark stamps). Generator content DONE (`level-plan.js`: eligible/budget/roster/evalRamp, pure fn of n). Generator geometry/solvability/assembly DONE (`level-generator.js`: 4 archetypes, roster→spawnRules+placements, §5.4 solvability + arena fallback, Q3 `G._prevDark` guard, music-key stamping). Owed by later subsystems: real entity factories (#2/#4), nav sink (#3), events emit (#11), light (#7), MUSIC registry (#11.3).
-- [ ] §2 Player — movement, health/overheal, melee, ranged, carry/vault states
+- [ ] §2 Player — movement, health/overheal, melee, ranged, carry/vault states.
+  **Phase 5 DONE (not yet BUILT):** `player.js` core — the load-bearing frame-
+  update ordering skeleton, NORMAL locomotion + multiplicative speed stack, the
+  two-source carry-aware collision filter, status overlays (ENTANGLED shave /
+  STUNNED random-walk + force-drop / POST-HIT invuln), world hooks (plate press
+  by weight, key-spend on `D`), VAULTING kinematics, and the damage/heal/
+  knockback sinks + abilities registry seam. Carry bodies (pickup/toss/vault
+  ENTRY — Phase 6) and ranged fire + shot motion/ricochet (Phase 7) are wired as
+  named stub hooks in their ordering slots. Box stays UNCHECKED until those land.
 - [ ] §7 Interactive objects — crates, barrels, shrapnel, carry physics
 - [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying
 - [ ] §6 Enemies + spawners
@@ -32,15 +40,17 @@ current or the next session starts blind.
 Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`,
 `level-plan.js` (generator content, pure fn of n, 6KB), `level-generator.js`
 (geometry/solvability/`generateLevel`, 27KB), `input.js` (device read,
-mode-lock FSM, `deriveSnapshot`, new). `world.js` re-adds `moveBody`
+mode-lock FSM, `deriveSnapshot`), `player.js` (locomotion/overlays/sinks +
+ordering skeleton, ~13KB, new). `world.js` re-adds `moveBody`
 (2-source, filtered) + `bodyHitsBlocker`; now imports `state.js` (S4, no cycle).
 Tests: `test-config.js`, `test-world.js`, `test-level-loader.js`,
 `test-level-content.js`, `test-level-generator.js` (20 checks),
-`test-level-integration.js` (16 checks), `test-input.js` (19 checks) — all
-green (226 checks total). Subsystem #1 complete; player subsystem (#2) in
-progress (SPEC-PLAYER Phase 1 config data done; Phase 2 world.js collision
-seam done; Phase 3 level-loader.js coord-keyed plate press + emit export
-done; Phase 4 input.js done).
+`test-level-integration.js` (16 checks), `test-input.js` (19 checks),
+`test-player.js` (49 checks) — all green (275 checks total). Subsystem #1
+complete; player subsystem (#2) in progress (SPEC-PLAYER Phase 1 config data
+done; Phase 2 world.js collision seam done; Phase 3 level-loader.js coord-keyed
+plate press + emit export done; Phase 4 input.js done; Phase 5 player.js core
+done — carry (Phase 6) + fire/projectiles (Phase 7) pending).
 
 ## Implementation sequencing (agreed order)
 
@@ -233,6 +243,62 @@ undefined, and `moveBody` reverting vs. passing through a synthetic crate by
 filter. Full suite still green, 201 checks total.
 
 *(Still expected later: real nav grid + entity modules fill the seams above.)*
+
+### 2026-07-05 — `player.js` register-callbacks seams (S3/§10/§11) — Phase 5 (SPEC-PLAYER)
+Three cross-module edges resolved as register-callbacks so `player.js` imports
+**only** config/state/world/level-loader/input (grep-asserted in
+`test-player.js`), never abilities/enemies/projectiles:
+- **abilities (#5) — registry.** `player.js` exposes `registerAbility("nova"|
+  "lightning", fn)` (default no-op); the ability edge-trigger in the frame loop
+  calls the registered fn. `player.js` never imports `abilities.js`; #5 registers
+  its handlers at boot. Abilities are locked while STUNNED (§5.2).
+- **enemies (#4) — they call INTO player, player never imports them.** The melee
+  overlap loop is #4's; it calls the player's exported sinks
+  (`applyDamageToPlayer`/`applyKnockbackToPlayer`) and reads `G.player.loco ===
+  "CARRYING"` for the §6.4 pushback rule. `meleeState` is reserved on `G.player`
+  for #4's pair-lockout wiring. No player→enemy import exists.
+- **events — reuse the loader's `emit` seam (S3).** `player.js` imports the
+  loader's already-exported `emit` (Phase 3) for `player:died`, `crate:dropped`,
+  `door:unlocked` (snapshot payloads, one-way). No new events module; when
+  `events.js` lands it registers its `emit` via the loader's `registerEmit` and
+  every producer (loader + player) routes through it unchanged.
+- **input — one-way.** `player.js` imports `input.js`'s `getSnapshot` (used by the
+  thin production entry `tickPlayer(dt)`); `input.js` imports only config/state.
+  The pure `updatePlayer(snapshot, dt)` takes the snapshot as an **argument** — no
+  device/canvas import reaches `player.js`, so headless tests drive it with
+  synthetic snapshots (§11 testability boundary upheld).
+
+### 2026-07-05 — frame-update ordering skeleton is load-bearing (§11) — Phase 5
+`updatePlayer` fixes the §11 order now so Phases 6–7 slot in without reordering:
+`snapshot → status timers (iframe/entangle/stun/cooldown) → status-forced drop
+(STUN) → [VAULTING? advance vault : move+collision(+plate/key) → carry → abilities
+→ fire] → shots update`. VAULTING short-circuits move+carry+fire (the guard is in
+even though nothing ENTERS vaulting until Phase 6). Carry actions, fire/volley,
+and shot-motion are **named no-op stub hooks** in their slots (`carryActions`,
+`tryFire`, `updateShots`); the STUN force-drop calls `dropCarried`, a Phase-5
+stub that exits the CARRYING state + emits `crate:dropped` (correct-direction;
+the crate LANDING/re-insert is Phase 6). `advanceVault` (the §5.1 lerp + auto-exit)
+IS implemented so VAULTING is self-consistent — only vault **entry** (from moving-
+release / wall-vault, which is carry-coupled) is deferred to Phase 6.
+
+### 2026-07-05 — FLAGGED HAZARD: crate/blocker entity coords are tile-keyed but `bodyHitsBlocker` reads them as pixels — Phase 5
+**Unflagged cross-phase inconsistency surfaced (per CLAUDE.md "phases flag their
+own risks").** `world.bodyHitsBlocker` (Phase 2) computes `dx = x - e.x` treating
+`e.x,e.y` as **pixel** coords, and `test-world.js`'s synthetic blockers use pixel
+coords — but the **loader's placeholder** entity (`mkPlaceholder`) stores `e.x,e.y`
+as **TILE** coords with `e.tc` as the pixel center. So collision against a
+*loader-placed* crate/spawner would currently mis-measure distance (tile numbers
+read as pixels). `player.js` (Phase 5) is unaffected — it supplies only the
+carry-aware `blockerFilter` *predicate*; geometry stays in `world.js` — and
+`test-player.js` uses pixel-coord synthetic crates (matching the `bodyHitsBlocker`
+contract), so all tests are honest. But the mismatch is real and must be resolved
+in **Phase 6**, which is where crates are actively spliced/re-inserted and where
+the real crate factory (owed by #2) is built. **Resolution options for Phase 6:**
+either (a) the real crate/blocker entities carry pixel `x,y` (recommended — matches
+`bodyHitsBlocker` + SPEC-PLAYER §2's collision use), or (b) `bodyHitsBlocker`
+reads `e.tc`. SPEC-PLAYER §2 pins the crate shape as the loader placeholder
+`{type,x,y,tc,blocks}`, so this is a contract reconciliation, not new design — but
+it needs a sign-off glance before Phase 6 wires real carry collision.
 
 ## Known open items (non-blocking for build)
 
@@ -532,3 +598,59 @@ fills, not invented design):**
 
 Full suite green, 226 checks total (config 17 / world 35 / level-loader 40 /
 level-content 79 / level-generator 20 / level-integration 16 / input 19).
+
+### 2026-07-05 — SPEC-PLAYER Phase 5 (`player.js` core — ordering, locomotion, overlays, world hooks, sinks)
+
+Built `src/player.js` (new, ~13KB, one concern) + `test-player.js` (49 checks
+green). Imports only config/state/world/level-loader/input (grep-asserted); never
+abilities/enemies/projectiles. **`updatePlayer(snapshot, dt)` is a pure function
+of (snapshot, dt, G)** — the production entry `tickPlayer(dt)` pulls the live
+snapshot from `input.getSnapshot` and delegates.
+
+Implements (this phase — NORMAL locomotion + overlays + sinks; carry = Phase 6,
+fire/projectiles = Phase 7 as named stub hooks):
+- **`initPlayer()`** augments the loader-set `G.player {x,y,tx,ty}` with the §2
+  live fields (r/angle/vx-vy/kv/loco/carry/iframe/vault/entangle/stun/stunVec/
+  meleeState/cooldown + `_platesPressed`).
+- **Frame ordering (§11, load-bearing)** — see Architecture decision above.
+- **Movement (§4.1/§4.2):** effective speed = `CFG.PLAYER.speed × Π(P3 modifiers)`
+  MULTIPLICATIVE (carry/entangle/stun co-occur) via exported `effectiveMoveSpeed`;
+  step through `world.moveBody` with the carry-aware `playerBlockerFilter`
+  (hands-free ⇒ only spawners solid, crates/barrels are pickup triggers; carrying
+  ⇒ all solid; never the carried entity). Knockback integrated separately, decays
+  `exp(-friction·dt)`, zeroed under a 1 px/s threshold, still collides.
+- **World hooks (§4.3):** pressure-plate press by weight (footprint-scan `_` tiles
+  → `setPlatePressedAt`, released on leaving); key-spend on a closed `D`
+  (confirm char via `world.map`, `G.keys--`, `openLockedDoor`, emit
+  `door:unlocked`, then the now-passable move proceeds; keys 0 ⇒ just blocked).
+- **Overlays (§5.2):** ENTANGLED (×0.35 + ≥60° input-turn shaves 0.3s vs
+  `entangleAngle`); STUNNED (input replaced by a random unit vector re-rolled every
+  0.3s at ×0.7, forces immediate drop, abilities locked); POST-HIT invuln (0.4s).
+  Drivers deferred (#4/#5); logic testable by setting fields directly.
+- **Sinks (§6.1/§6.2):** `applyDamageToPlayer` (no-op under iframe/VAULTING; else
+  hp-=amount, arm 0.4s iframe, hp≤0 ⇒ DEAD + emit `player:died`, final);
+  `healPlayer` (clamps at `G.overhealCap`=30); `applyKnockbackToPlayer` (kv =
+  unit(dir)×impulse). `registerAbility` edge seam (locked while stunned).
+- **VAULTING kinematics (§5.1):** `advanceVault` lerps from→to over `vaultDur` and
+  auto-returns to NORMAL (entry deferred to Phase 6).
+
+Tests cover §12 items 2 (wall slide / spawner block / hands-free-crate-not-blocked
+/ carrying-crate-blocked), 3 (multiplicative stack, exact 112×0.85×0.35(×0.70)),
+6 (damage subtract + iframe + iframe/VAULTING no-op + heal clamp + DEAD +
+`player:died` + death-is-final), 9 (plate opens/closes linked door; key spend at
+keys≥1 vs blocked at keys=0), 10 (entangle ≥60° shaves 0.3s / sub-threshold does
+not), the STUN random-walk + force-drop (`crate:dropped`, deterministic via a
+stubbed `Math.random`), knockback set/decay/settle, the abilities edge+stun-lock
+seam, `initPlayer` shape, and the config/state/world/level-loader/input-only import
+grep. Full suite green, 275 checks total (config 17 / world 35 / level-loader 40 /
+level-content 79 / level-generator 20 / level-integration 16 / input 19 /
+player 49).
+
+**Decisions surfaced & logged under Architecture:** the three register-callbacks
+seams (abilities registry / enemy-calls-into-player / loader `emit` reuse) + the
+one-way input boundary; the load-bearing frame-ordering skeleton and its named
+stub hooks; and — flagged as an **unflagged cross-phase hazard** — the crate/
+blocker entity coordinate mismatch (loader stores tile `x,y`; `bodyHitsBlocker`
+reads pixels), owed to Phase 6 to reconcile (SPEC-PLAYER §2 pins the crate shape,
+so it's a contract reconciliation, not new design). **§2 build-status box NOT
+flipped to BUILT** (carry + fire pending). No git.
