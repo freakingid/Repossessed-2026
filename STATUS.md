@@ -80,3 +80,22 @@ register-callbacks / one-way flow — see SPEC-LEVEL §7.)*
 Tuning / design-feel only — none block implementing the mechanism:
 Q1 archetype algorithm play-feel; Q2 key budget (GDD §14.1); Q4 fallback
 archetype identity; Q5 the `(proposed)` generator numbers (GDD §14.2).
+
+## Session log
+
+### 2026-07-05 — Phase 1 (config/state foundation)
+
+Phase 1 — config/state/package.json authored; CFG.{TILES,PLAN,RAMP,SPAWNER,GEN}
+in place; G run-state + G.ramp slot + G._prevDark added. `node test-config.js`
+green (11 checks). `config.js`/`state.js` import nothing (leaf modules,
+confirmed structurally by the test). No behavior/build-status box flipped —
+data only.
+
+**Spec gap found (not invented around):** SPEC-LEVEL §5.1's `CFG.PLAN.costs`
+table omits `lobber`, despite `lobber` being introduced as a roster element on
+Night 4 (§5.1 `introductions`). Filled in using the same documented formula
+the rest of the table follows (GDD §6.2 pts ÷ 50): Lobber = 100 pts → cost 2
+(matches Skeleton's cost, which also has 100 pts). Comment left in
+`config.js` at the `costs` table. Flagging here per CLAUDE.md's "surface,
+don't invent design" rule — this is a mechanical fill via an existing
+formula, not a new tuning decision, but worth a sign-off glance.
