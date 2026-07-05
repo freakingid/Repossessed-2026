@@ -170,4 +170,10 @@ export const CFG = {
     deadzone: 0.2,        // stick deadzone (move + right-stick fire)  (§3)
     gamepad: {},          // §4.1 indices — stub; not fully enumerated in fetched spec excerpts
   },
+
+  // Pathfinding infrastructure (SPEC-PATHFINDING §2). Leaf data — no import change.
+  NAV: {
+    repathMinInterval: 0.5,    // s — per-navigator repath rate floor (proposed, Q-NAV; consumed by #4, not nav)  (GDD §6.4)
+    diagonalCost: Math.SQRT2,  // 8-dir diagonal step cost; orthogonal = 1.0  (used by Phase 2 A*)
+  },
 };

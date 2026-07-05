@@ -1,8 +1,10 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 7 — projectiles.js + player.js fire hook: volley gate, owner-scoped cap, two-source ricochet. **Subsystem #2 (Player) BUILT.**)
+**Last updated:** 2026-07-05 (SPEC-PATHFINDING Phase 1 — `CFG.NAV` + `nav.js` infrastructure: mask predicates, mask-split occupancy grid, dirty/version seam. `findPath` owed to Phase 2 — §6.4 build-status box NOT flipped.)
 **State in one line:** **Subsystems #1 (Level loader + generator) and #2 (Player,
-incl. crates §7.1) are BUILT and tested headlessly.** Foundation (config/state/world) + the **loader** + the
+incl. crates §7.1) are BUILT and tested headlessly.** Subsystem #3 (Pathfinding)
+is **in progress**: `nav.js` infrastructure (masks/occupancy/dirty/seam) is
+built; the A\* solver (`findPath`) is Phase 2. Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
 **geometry/solvability/assembly half** (`generateLevel(n, rng)` in
 `level-generator.js`) are all done; `generateLevel` always returns a loadable,
@@ -40,7 +42,11 @@ current or the next session starts blind.
 - [ ] §7 Interactive objects — **crates (§7.1) BUILT** (carry physics in `player.js`,
   crate-always ricochet in `projectiles.js`); **barrels (§7.2), shrapnel deferred**
   to SPEC-BARRELS (post-#4).
-- [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying
+- [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying. **Phase 1
+  (infrastructure) BUILT:** `nav.js` mask predicates (`isNavBlocked`,
+  GROUND/PHANTOM), mask-split occupancy grid derived from live `G` arrays
+  (D3), dirty/version accounting, `installNav` blocker-sink seam fill.
+  **`findPath` (grid A\*) is Phase 2 — owed, box stays unchecked until then.**
 - [ ] §6 Enemies + spawners
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
@@ -56,14 +62,18 @@ ordering skeleton + crate carry system + **ranged fire hook**, ~23KB),
 two-source ricochet; imports config/state/world only, never player). `world.js`
 re-adds `moveBody` (2-source, filtered) + `bodyHitsBlocker`; now imports
 `state.js` (S4, no cycle). `level-loader.js` movable-entity placeholders carry
-**pixel** `x,y` (Phase-6 coord reconciliation). Tests: `test-config.js` (17),
+**pixel** `x,y` (Phase-6 coord reconciliation). `nav.js` (**new** — SPEC-PATHFINDING
+Phase 1: `NAV_MASK`, `isNavBlocked`, `getNavVersion`, `consumeDirtyTiles`,
+`installNav`; imports config/state/world/level-loader only, leaf w.r.t.
+gameplay; `findPath` deferred to Phase 2). Tests: `test-config.js` (19),
 `test-world.js` (35), `test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
-`test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17) — all
-green (**351 checks total**). Subsystems #1 and #2 complete (SPEC-PLAYER
-Phases 1–7 all done: config data, world.js collision seam, loader coord-keyed
-plate press + emit export, input.js, player.js core, carry system, fire +
-projectiles.js).
+`test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
+`test-nav.js` (24) — all green (**377 checks total**). Subsystems #1 and #2
+complete (SPEC-PLAYER Phases 1–7 all done: config data, world.js collision
+seam, loader coord-keyed plate press + emit export, input.js, player.js core,
+carry system, fire + projectiles.js). Subsystem #3 (Pathfinding) Phase 1 of
+SPEC-PATHFINDING done; Phase 2 (`findPath`, grid A\*) is next.
 
 ## Implementation sequencing (agreed order)
 
@@ -107,6 +117,26 @@ light-emitter registry (#7), music registry. Fill seams, don't reach across.
 - **Convention — recommended code split:** implement subsystem #1 as
   `level-loader.js` + `level-generator.js` (SPEC-LEVEL §7), per split-on-seams
   file discipline.
+
+### 2026-07-05 — `nav.js` occupancy consumed as invalidation-only, not an incremental list — Phase 1 (SPEC-PATHFINDING)
+The loader's pre-built blocker-sink seam (`registerBlockerSink`/`markNavDirty`,
+SPEC-LEVEL §6.1) hands `nav.js` a whole entity on `registerBlocker`, which could
+tempt building an incremental blocker list. **Not done** — that list would go
+stale the moment a crate moves (carry system `splice`s + re-inserts, only
+calling `markNavDirty`, never re-registering — SPEC-PLAYER §9) or a barrel is
+destroyed (SPEC-BARRELS, deferred). Instead `registerBlocker`/`markDirty` are
+consumed **purely as invalidation signals** (bump `navVersion`, set
+`occupancyDirty`); the mask-split occupancy (`occGround`/`occPhantom`, two
+`Set<packedKey>`) is rebuilt lazily from live `G.crates ∪ G.barrels ∪
+G.spawners` on the next `isNavBlocked` query. Spawners occupy `GROUND` only
+(Q2 baseline — static like terrain to the Reaper, unlike a movable crate/
+barrel). GROUND's wall/door truth comes from `world.isWall` live (already
+resolves the door-state resolver + OOB) — occupancy never duplicates door
+state (would desync on door open). PHANTOM bypasses `isWall` (walls/doors
+passable to the Reaper) and has its own explicit OOB guard. This is an
+**interpretation of a seam authored before nav existed** (SPEC-PATHFINDING
+D3, flagged in the spec itself for a sign-off glance) — not new design, the
+spec pinned this reading.
 
 ## Architecture / circular-import decisions
 
@@ -899,3 +929,57 @@ first implementation pass. **No spec gaps requiring invented design;** the S1
 `G.powerups`-keys ruling was applied in live code and the ADD divergences
 (Fast-for-Rapid, owner-scoped cap, crate-always ricochet) applied as flagged. One
 §8 interpretation logged (crate ricochet doesn't bump `bounceCount`). No git.
+
+### 2026-07-05 — SPEC-PATHFINDING Phase 1 (`CFG.NAV` + `nav.js` infrastructure)
+
+First build phase of subsystem #3 (Pathfinding). Built `src/nav.js` (new,
+~3KB, one concern — well under the 24KB smell) + `test-nav.js` (new, 24 checks
+green) + extended `test-config.js` (17→19). Added `CFG.NAV` (`repathMinInterval:
+0.5`, `diagonalCost: Math.SQRT2`) to `config.js` — data only, leaf import-count
+unchanged (grep-verified still 0 imports).
+
+Implements (SPEC-PATHFINDING §2/§3/§4, everything except `findPath`):
+- **`NAV_MASK`** (`GROUND`/`PHANTOM`) + **`isNavBlocked(tx,ty,mask)`** (§D2):
+  GROUND = `world.isWall(tx,ty) || occGround.has(tile)` (free terrain/door/OOB
+  from the live tile-state resolver); PHANTOM = `outOfBounds(tx,ty) ||
+  occPhantom.has(tile)` (walls/doors passable to the Reaper; own explicit OOB
+  guard per R4, since it never calls `isWall`).
+- **Mask-split occupancy** (`occGround`/`occPhantom`, two `Set<packedKey>`),
+  lazily rebuilt from live `G.crates`/`G.barrels`/`G.spawners` on
+  `occupancyDirty` (O(#objects)). Crates/barrels occupy **both** masks;
+  spawners occupy **GROUND only** (Q2 baseline — see Decision log above).
+  Terrain/doors are never copied into occupancy (R3) — GROUND reads them live.
+- **Dirty/version mechanism:** `invalidate()` (bump `navVersion`, set
+  `occupancyDirty`), `getNavVersion()`, `consumeDirtyTiles()` (drains the
+  `Set`, returns `[{tx,ty}]`).
+- **Seam fill:** `installNav()` registers a `navBlockerSink` on the loader's
+  `registerBlockerSink` (SPEC-LEVEL §6.1) — `registerBlocker`/`markDirty` are
+  consumed as invalidation-only signals, never an incremental list (D3 — see
+  Decision log above for the full rationale).
+- **D6 sentinel:** no `Infinity` anywhere in the file (grep-tested); `gScore`/
+  A\* itself doesn't exist yet (Phase 2), so this just confirms the house rule
+  wasn't violated by anything shipped this phase.
+
+Tests (`test-nav.js`, §10 items 1/4/5/6/7/8/9(partial)/11/12/13 — items 2/3/10
+are A\*-specific and deferred to Phase 2): GROUND wall/floor + closed↔open
+plate-door round-trip via a real `setPlatePressedAt` press (live `world.isWall`
+round-trip); PHANTOM passes a wall tile and a closed door, rejects OOB tiles
+both negative and `>=COLS`; spawner blocks GROUND but not PHANTOM (Q2 baseline
+pin); occupancy derives from live `G` — a seeded crate blocks both masks, a
+`splice`+`markDirty` clears it, and a `markDirty` with **no** backing `G` entry
+blocks nothing (proves invalidation-only consumption, not a stale list);
+`getNavVersion` strictly increases per `markDirty` call and `consumeDirtyTiles`
+returns exactly the accumulated tiles then clears; `installNav` wiring
+end-to-end through a real loader door-press; import-discipline grep (only
+config/state/world/level-loader); source grep for zero `Infinity`. Full suite
+green, **377 checks total** (config 19 / world 35 / level-loader 40 /
+level-content 79 / level-generator 20 / level-integration 16 / input 19 /
+player 108 / projectiles 17 / nav 24).
+
+**No spec gaps requiring invented design.** The one interpretation this phase
+made (occupancy consumption as invalidation-only, D3) was explicitly flagged
+*by the spec itself* as needing a sign-off glance, not discovered — logged
+under Decision log above, not invented. **§6.4 build-status box NOT flipped**
+(`findPath` is Phase 2, the R1 corner-cut × per-class-mask subtlety flagged
+for Opus/thinking-on/high-effort per the phase prompt's own escalation rule).
+No git.

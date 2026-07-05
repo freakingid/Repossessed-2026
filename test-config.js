@@ -131,5 +131,9 @@ check("CFG.PLAYER.speed = 3.5 t/s x TILE(32) = 112", CFG.PLAYER.speed === 3.5 * 
 check("CFG.SHOT.range = 7 t x TILE(32) = 224", CFG.SHOT.range === 7 * CFG.TILE);
 check("CFG.PLAYER.vaultHop = 2.0 t x TILE(32) = 64", CFG.PLAYER.vaultHop === 2.0 * CFG.TILE);
 
+// --- CFG.NAV (SPEC-PATHFINDING §2) --------------------------------------
+check("CFG.NAV.repathMinInterval === 0.5", CFG.NAV.repathMinInterval === 0.5);
+check("CFG.NAV.diagonalCost present and equals Math.SQRT2", CFG.NAV.diagonalCost === Math.SQRT2);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
