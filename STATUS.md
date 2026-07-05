@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 2 — world.js moveBody/bodyHitsBlocker)
+**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 3 — level-loader.js coord-keyed plate press + emit export)
 **State in one line:** **Subsystem #1 (Level loader + generator) is BUILT and
 tested headlessly.** Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -456,3 +456,26 @@ level-generator 20 / level-integration 16).
 exactly as scoped in the phase prompt — mechanism only, no reach into
 `G.player`/carry state. Owed by later phases: `player.js` supplies the actual
 `blockerFilter` (carry-state eligibility) when it lands.
+
+### 2026-07-05 — SPEC-PLAYER Phase 3 (`level-loader.js` — coord-keyed plate press + `emit` export)
+
+Two seam additions to the already-shipped loader, both satisfying items owed
+to #2 (player) from Phase 3/SPEC-LEVEL: `setPlatePressedAt(tx, ty, pressed)`
+delegates to the existing id-keyed `setPlatePressed` (single recompute path —
+`recomputeDoor` stays the only place a door's `open` flips); an unlinked `_`
+plate (`id == null`) is a harmless no-op since nothing reads it (§4.3). The
+previously-internal `emit(type, payload)` is now exported for the player
+event seam (§10) — no behavior change, `loadLevel`'s internal emit calls are
+the same function.
+
+Extended `test-level-loader.js` (34 → 40 checks): a coord-keyed mirror of the
+existing id-keyed link test (press/release via `(tx,ty)` opens/closes the
+door, read black-box via `world.isWall`), an unlinked-plate no-op, a
+non-plate-tile no-op, and an `emit` type-of-function check. Full suite green,
+207 checks total (config 17 / world 35 / level-loader 40 / level-content 79 /
+level-generator 20 / level-integration 16). Loader still imports only
+config/state/world (unchanged, no new imports needed for either addition).
+
+**No spec gaps requiring invented design.** Both additions were exactly the
+seams flagged as owed (SPEC-LEVEL §4.3 delegated coord setter; §10 emit
+export).

@@ -10,7 +10,7 @@ import { CFG } from "./src/config.js";
 import { G } from "./src/state.js";
 import { map, isWall } from "./src/world.js";
 import {
-  loadLevel, validateLevelDef, setPlatePressed,
+  loadLevel, validateLevelDef, setPlatePressed, setPlatePressedAt, emit,
 } from "./src/level-loader.js";
 
 let passed = 0, failed = 0;
@@ -129,6 +129,41 @@ setPlatePressed("pA", false);
 check("door stays open while B still pressed",  !isWall(4, 1));
 setPlatePressed("pB", false);
 check("door closes once both plates released",  isWall(4, 1));
+
+/* ========================================================================= *
+   §4.3 — setPlatePressedAt: coord-keyed delegate to setPlatePressed. Mirrors
+   the link test above but via (tx,ty) instead of id.
+ * ========================================================================= */
+const coordLinkDef = {
+  id: "coord-link", name: "CoordLink",
+  tiles: [
+    "#########",
+    "#...d...#",   // door 'd' at (4,1)
+    "#._....#.",   // plate at (2,2) linked; unlinked '_' at (7,2)
+    "#.......#",
+    "#.......#",
+    "#########",
+  ],
+  zones: [],
+  placements: [
+    { type: "player", x: 1, y: 4 },
+    { type: "exit",   x: 7, y: 4 },
+    { type: "door",   x: 4, y: 1, id: "gate" },
+    { type: "plate",  x: 2, y: 2, id: "pC" },
+  ],
+  links: [{ plate: "pC", door: "gate" }],
+};
+loadLevel(coordLinkDef);
+check("coord: door starts closed (solid)",       isWall(4, 1));
+setPlatePressedAt(2, 2, true);
+check("coord: pressing linked plate opens door", !isWall(4, 1));
+setPlatePressedAt(2, 2, false);
+check("coord: releasing linked plate closes door", isWall(4, 1));
+setPlatePressedAt(7, 2, true);
+check("coord: unlinked plate press is a no-op",  isWall(4, 1));
+setPlatePressedAt(3, 3, true);
+check("coord: non-plate tile press is a no-op",  isWall(4, 1));
+check("emit is exported as a function",          typeof emit === "function");
 
 /* ========================================================================= *
    §8.4 — scattered entities never land on solid / plate / exit tiles.

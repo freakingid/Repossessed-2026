@@ -41,7 +41,7 @@ function registerBlocker(entity) { navSink.registerBlocker(entity); }
    the payload, never reach back into G). */
 let emitFn = null;
 export function registerEmit(fn) { emitFn = fn; }
-function emit(type, payload) { if (emitFn) emitFn(type, payload); }
+export function emit(type, payload) { if (emitFn) emitFn(type, payload); }
 
 /* ---- Seam: entity-factory registry (#2/#4, SPEC-LEVEL §6.2/§6.3) ---------
    The loader must not import player.js/enemies.js (they don't exist and would
@@ -144,6 +144,15 @@ export function setPlatePressed(id, pressed) {
   if (!p) return;
   p.pressed = !!pressed;
   for (const l of links) if (l.plate === id) recomputeDoor(l.door);
+}
+
+// Coord-keyed plate press for #2's carry/interact seam (SPEC-LEVEL §4.3).
+// Delegates to setPlatePressed so recomputeDoor stays the single link-recompute
+// path — no reimplementation here. An unlinked '_' plate (id null) is a
+// harmless no-op: nothing reads it.
+export function setPlatePressedAt(tx, ty, pressed) {
+  const s = tileState.get(packKey(tx, ty));
+  if (s && s.kind === "plate" && s.id != null) setPlatePressed(s.id, pressed);
 }
 
 // Setter exposed for #2 (key-spend). Opens a locked (D) door permanently — a
