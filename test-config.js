@@ -105,5 +105,31 @@ check("G has persistent run-state fields",
 check("G.ramp slot exists (filled at load)", "ramp" in G && typeof G.ramp === "object");
 check("G._prevDark exists, unsaved boolean, init false", G._prevDark === false);
 
+// --- CFG.PLAYER / CFG.SHOT / CFG.KEYS (SPEC-PLAYER data layer) ----------
+const playerFields = [
+  "speed", "r", "iframe", "vaultDur", "vaultHop", "tossMax", "carryMult",
+  "entangleMult", "stunMult", "entangleDur", "stunDur", "stunReroll",
+  "entangleShaveSec", "entangleTurnDeg", "meleeDamageToEnemy",
+  "knockbackImpulse", "knockbackFriction",
+];
+check("CFG.PLAYER exists with all required fields",
+  !!CFG.PLAYER && playerFields.every(f => f in CFG.PLAYER));
+
+const shotFields = [
+  "speed", "range", "cooldown", "baseMax", "r", "muzzle", "spread",
+  "bigDmgMult", "bigRadiusMult",
+];
+check("CFG.SHOT exists with all required fields",
+  !!CFG.SHOT && shotFields.every(f => f in CFG.SHOT));
+
+check("CFG.KEYS exists with move/nova/lightning/pause/deadzone",
+  !!CFG.KEYS && !!CFG.KEYS.move && "nova" in CFG.KEYS && "lightning" in CFG.KEYS &&
+  "pause" in CFG.KEYS && "deadzone" in CFG.KEYS);
+
+// spot-check tile x 32 conversions (SPEC-PLAYER §1 P7)
+check("CFG.PLAYER.speed = 3.5 t/s x TILE(32) = 112", CFG.PLAYER.speed === 3.5 * CFG.TILE);
+check("CFG.SHOT.range = 7 t x TILE(32) = 224", CFG.SHOT.range === 7 * CFG.TILE);
+check("CFG.PLAYER.vaultHop = 2.0 t x TILE(32) = 64", CFG.PLAYER.vaultHop === 2.0 * CFG.TILE);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

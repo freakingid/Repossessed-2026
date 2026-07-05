@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (Phase 5 — level-generator.js geometry/solvability)
+**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 1 — config data + powerups-key fix)
 **State in one line:** **Subsystem #1 (Level loader + generator) is BUILT and
 tested headlessly.** Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -181,6 +181,34 @@ Note: the Phase-4 `buildRoster` weighting is degenerate (repeatedly picks the
 cheapest affordable element ⇒ rosters skew all-`ghost`); that is signed-off
 content behavior and Q5 (§14.2) tuning, not a generator bug — the generator
 places whatever roster it is handed.
+
+### 2026-07-05 — S1 CONFLICT ruling: `G.powerups` canonical keys are `triple/big/fast/bounce` — Phase 1 (SPEC-PLAYER)
+Phase-1 (config/state foundation) left `state.js`'s `G.powerups` comment as
+`{ tripleShot: …, bigShot: …, fastShot: …, bounceShot: … }`. SPEC-PLAYER §7
+(P1: four independent power-up flags) reads/decrements `G.powerups.triple/
+big/fast/bounce` — short keys, no `Shot` suffix. Ruling (S1): **spec keys
+win** — the comment is corrected to `{ triple, big, fast, bounce }`. No live
+code existed to rename (state.js only ever declared the empty `{}` literal +
+comment); this is a comment-only fix, not a behavior change. This is the
+contract #3 (pickup collection, which writes `G.powerups`) and this phase's
+own `CFG.SHOT`-reading code (once player.js lands) must both honor.
+
+### 2026-07-05 — `CFG.PLAYER`/`CFG.SHOT`/`CFG.KEYS` data added — Phase 1 (SPEC-PLAYER)
+Added three leaf-data blocks to `config.js` ahead of building `player.js`/
+`input.js`/`projectiles.js` (SPEC-PLAYER §1 P7, §2, §3, §7). All px values are
+GDD tile/sec or tile-distance values × `TILE(32)`, commented with their tile
+source and spec section; `(proposed)` dials are flagged `Q-P1`/`Q-P2` per
+SPEC-PLAYER §13 (play-feel tuning, not build blockers). `config.js` stays a
+leaf — no new imports (grep-verified by `test-config.js`'s existing
+import-discipline check, still green). `CFG.KEYS.gamepad` is left as an empty
+stub — SPEC-PLAYER §4.1's gamepad button/axis indices weren't in the fetched
+spec excerpt; **owed:** fill in when `input.js` (this subsystem, later phase)
+needs them or the full §4.1 table is available. Extended `test-config.js`
+(11 → 17 checks): field-presence checks for all three blocks plus spot-check
+tile×32 conversions (`speed`=112, `range`=224, `vaultHop`=64). Full suite
+(config/world/level-loader/level-content/level-generator/level-integration)
+still green, 194 checks total — data-only change, no behavior/build-status
+box flipped.
 
 *(Still expected later: real nav grid + entity modules fill the seams above.)*
 
@@ -365,3 +393,24 @@ determinism dependency; loose enemies as forward-compatible placements (owed by
 #6). Proposed `CFG.GEN`/`CFG.PLAN` numbers (Q1/Q4/Q5) left as dials, not
 blockers. Seams for #2 (plate/key setters), #3 (nav sink), #4 (spawner tick),
 #7 (light) and #11.3 (MUSIC) confirmed in place (loader-side, unchanged).
+
+### 2026-07-05 — SPEC-PLAYER Phase 1 (config data + powerups-key fix)
+
+First build phase of subsystem #2 (Player). Data-only: added `CFG.PLAYER`,
+`CFG.SHOT`, `CFG.KEYS` to `config.js` and fixed the `G.powerups` comment in
+`state.js` to the spec-canonical `triple/big/fast/bounce` keys (S1 ruling —
+see Architecture decisions above). No behavior built yet; `player.js`/
+`input.js`/`projectiles.js` are the next build.
+
+Extended `test-config.js` (11 → 17 checks): presence checks for all three new
+`CFG` blocks plus spot-check tile×32 conversions. Full suite still green
+(config/world/level-loader/level-content/level-generator/level-integration),
+194 checks total. `config.js` import-discipline check (leaf, no imports)
+still passes structurally — no new imports added.
+
+**No spec gaps requiring invented design.** One spec-internal conflict (S1,
+flagged in the phase prompt) was resolved procedurally per the given ruling
+(spec keys win), not invented: logged under Architecture decisions above.
+Owed by later phases: real `player.js`/`input.js`/`projectiles.js` builds
+consuming this data; `CFG.KEYS.gamepad` indices (§4.1) left stubbed pending
+either `input.js`'s build or a fuller spec excerpt.

@@ -15,7 +15,7 @@ export const G = {
   gemEnergy: 0,
   storedCharges: 0,
   keys: 0,
-  powerups: {},   // { tripleShot: <shots remaining>, bigShot: …, fastShot: …, bounceShot: … }
+  powerups: {},   // { triple: <shots remaining>, big: …, fast: …, bounce: … }  (SPEC-PLAYER §7, S1: spec keys canonical)
   score: 0,
   night: 1,
 

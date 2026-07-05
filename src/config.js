@@ -128,4 +128,46 @@ export const CFG = {
       ring:    ["siege_a"],
     },
   },
+
+  // Player tunables (SPEC-PLAYER §1 P2-P4, §2, §4-9). Px values are GDD
+  // tile/sec or tile-distance values × TILE(32) per §1 P7; comments name the
+  // tile source. (proposed) dials are flagged Q-P1/Q-P2 — play-feel, not
+  // blocking (SPEC-PLAYER §13).
+  PLAYER: {
+    speed: 112,            // 3.5 t/s × 32  (NOT ADD's 185)  (§1 P7)
+    r: 12,                 // (proposed, Q-P1) under TILE/2=16 so player fits 1-tile gaps (§1 P2)
+    iframe: 0.40,          // post-hit invuln (s)  (§6.1)
+    vaultDur: 0.35,        // VAULTING hop duration (s)  (§5.1)
+    vaultHop: 64,          // 2.0 t × 32  (§5.1, §9)
+    tossMax: 48,           // 1.5 t × 32  (stationary-release toss reach)  (§9)
+    carryMult: 0.85,       // CARRYING speed ×  (§2.5, §1 P3)
+    entangleMult: 0.35,    // ENTANGLED speed ×  (§2.5, §1 P3)
+    stunMult: 0.70,        // STUNNED random-vector speed ×  (§2.5, §1 P3)
+    entangleDur: 2.5, stunDur: 3.0, stunReroll: 0.30,   // (§5.2)
+    entangleShaveSec: 0.30, entangleTurnDeg: 60,        // >=60 deg turn shaves 0.3s  (§5.2)
+    meleeDamageToEnemy: 2,                              // ADD mop value (sink; exchange loop is #4)  (§6.3)
+    knockbackImpulse: 520, knockbackFriction: 9,        // (proposed, Q-P1) ADD model; tuned to ~=0.75 t  (§1 P4, §6.2)
+  },
+
+  SHOT: {
+    speed: 288,            // 9 t/s × 32  (NOT ADD's 470)  (§1 P7)
+    range: 224,            // 7 t × 32    (NOT ADD's 360)  (§1 P7)
+    cooldown: 0.25,        // 4/s base    (NOT ADD's 0.16) (§1 P7, §7)
+    baseMax: 3,            // base on-screen cap  (§7)
+    r: 6,                  // (proposed, Q-P2) ADD value  (§13)
+    muzzle: 6,             // ADD muzzle offset r + 6  (§7)
+    spread: 0.2094,        // +-12 deg in rad (Triple fan)  (§1 P1, §7)
+    bigDmgMult: 2, bigRadiusMult: 1.6,   // Big: independent dmg x2 and hitbox x1.6  (§1 P1, §13)
+  },
+
+  // Remappable default keybinds (SPEC-PLAYER §3, §4.1). input.js reads this
+  // map (or a runtime override); the Options remap UI (#6) writes it via
+  // input.js's setKeybinds(map) seam.
+  KEYS: {
+    move: { up: "KeyW", down: "KeyS", left: "KeyA", right: "KeyD" },
+    nova: "KeyN", lightning: "KeyL", pause: ["Space", "Escape"],
+    confirm: "Enter", back: "Escape", mute: "KeyM",
+    deadzone: 0.2,        // stick deadzone (move + right-stick fire)  (§3)
+    gamepad: {},          // §4.1 indices — stub; not fully enumerated in fetched spec excerpts
+  },
 };
