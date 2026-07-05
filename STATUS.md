@@ -1,8 +1,8 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 6 — player.js carry system: pickup, toss, drop-vault, wall-vault, STUN force-drop; coord hazard resolved)
-**State in one line:** **Subsystem #1 (Level loader + generator) is BUILT and
-tested headlessly.** Foundation (config/state/world) + the **loader** + the
+**Last updated:** 2026-07-05 (SPEC-PLAYER Phase 7 — projectiles.js + player.js fire hook: volley gate, owner-scoped cap, two-source ricochet. **Subsystem #2 (Player) BUILT.**)
+**State in one line:** **Subsystems #1 (Level loader + generator) and #2 (Player,
+incl. crates §7.1) are BUILT and tested headlessly.** Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
 **geometry/solvability/assembly half** (`generateLevel(n, rng)` in
 `level-generator.js`) are all done; `generateLevel` always returns a loadable,
@@ -20,20 +20,26 @@ current or the next session starts blind.
 ## Build status (mirrors GDD build-status index — all NOT BUILT)
 
 - [x] **§8 Level** — **BUILT.** Loader DONE (schema/validate/loadLevel/tile-state+links/spawn-rule placement; tile set + dark stamps). Generator content DONE (`level-plan.js`: eligible/budget/roster/evalRamp, pure fn of n). Generator geometry/solvability/assembly DONE (`level-generator.js`: 4 archetypes, roster→spawnRules+placements, §5.4 solvability + arena fallback, Q3 `G._prevDark` guard, music-key stamping). Owed by later subsystems: real entity factories (#2/#4), nav sink (#3), events emit (#11), light (#7), MUSIC registry (#11.3).
-- [ ] §2 Player — movement, health/overheal, melee, ranged, carry/vault states.
-  **Phases 5–6 DONE (not yet BUILT):** `player.js` core — the load-bearing frame-
-  update ordering skeleton, NORMAL locomotion + multiplicative speed stack, the
-  two-source carry-aware collision filter, status overlays (ENTANGLED shave /
-  STUNNED random-walk + force-drop / POST-HIT invuln), world hooks (plate press
-  by weight + resting-crate hold, key-spend on `D`), VAULTING kinematics, the
-  damage/heal/knockback sinks + abilities registry seam **(Phase 5)**, and the
-  full **crate carry system (Phase 6)**: automatic pickup (splice + nav-dirty),
+- [x] **§2 Player — BUILT.** `player.js` (movement, health/overheal, melee sinks,
+  ranged fire, carry/vault states) + `projectiles.js` (shot motion/range/ricochet)
+  complete. **Phase 5** — frame-update ordering skeleton, NORMAL locomotion +
+  multiplicative speed stack, two-source carry-aware collision filter, status
+  overlays (ENTANGLED shave / STUNNED random-walk + force-drop / POST-HIT invuln),
+  world hooks (plate press by weight + resting-crate hold, key-spend on `D`),
+  VAULTING kinematics, damage/heal/knockback sinks + abilities registry seam.
+  **Phase 6** — crate carry system: automatic pickup (splice + nav-dirty),
   stationary toss, moving drop-vault, wall-vault (1- vs ≥2-thick), STUN force-drop,
-  degrade-to-toss rules, and the `isCarryingCrate()` pushback flag for #4. Ranged
-  fire + shot motion/ricochet (Phase 7) are still wired as named stub hooks
-  (`tryFire`/`updateShots`) in their ordering slots. Box stays UNCHECKED until
-  fire lands.
-- [ ] §7 Interactive objects — crates, barrels, shrapnel, carry physics
+  degrade-to-toss rules, `isCarryingCrate()` pushback flag for #4. **Phase 7** —
+  ranged fire hook (`tryFire`): volley gate (`fireHeld && cooldown≤0 &&
+  playerShotCount+volley ≤ cap`, cap counting `owner==="player"` ONLY), Triple/
+  Fast/Big/Bounce per-trigger flags + one-shot-off-each decrement, sfx/audio leaf
+  seam, `player:fired` emit; `projectiles.js` `makeShot` factory + `updateShots`
+  (integrate/range-expiry/two-source ricochet: crates-always + Bounce-walls,
+  per-axis, owner+dmg retained, range not reset). Damage-to-targets deferred to
+  #4/combat (enemies/barrels don't exist yet).
+- [ ] §7 Interactive objects — **crates (§7.1) BUILT** (carry physics in `player.js`,
+  crate-always ricochet in `projectiles.js`); **barrels (§7.2), shrapnel deferred**
+  to SPEC-BARRELS (post-#4).
 - [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying
 - [ ] §6 Enemies + spawners
 - [ ] §5 Abilities — Nova, Lightning, gem economy
@@ -45,18 +51,19 @@ Repo `src/` contains: `config.js`, `state.js`, `world.js`, `level-loader.js`,
 `level-plan.js` (generator content, pure fn of n, 6KB), `level-generator.js`
 (geometry/solvability/`generateLevel`, 27KB), `input.js` (device read,
 mode-lock FSM, `deriveSnapshot`), `player.js` (locomotion/overlays/sinks +
-ordering skeleton + **crate carry system**, ~21KB). `world.js` re-adds `moveBody`
-(2-source, filtered) + `bodyHitsBlocker`; now imports `state.js` (S4, no cycle).
-`level-loader.js` movable-entity placeholders now carry **pixel** `x,y`
-(Phase-6 coord reconciliation, below). Tests: `test-config.js`, `test-world.js`,
-`test-level-loader.js`, `test-level-content.js`, `test-level-generator.js`
-(20 checks), `test-level-integration.js` (16 checks), `test-input.js`
-(19 checks), `test-player.js` (88 checks) — all green (314 checks total).
-Subsystem #1 complete; player subsystem (#2) in progress (SPEC-PLAYER Phase 1
-config data done; Phase 2 world.js collision seam done; Phase 3 level-loader.js
-coord-keyed plate press + emit export done; Phase 4 input.js done; Phase 5
-player.js core done; Phase 6 carry system done — fire/projectiles (Phase 7)
-pending).
+ordering skeleton + crate carry system + **ranged fire hook**, ~23KB),
+`projectiles.js` (**new** — `makeShot` factory + `updateShots` motion/range/
+two-source ricochet; imports config/state/world only, never player). `world.js`
+re-adds `moveBody` (2-source, filtered) + `bodyHitsBlocker`; now imports
+`state.js` (S4, no cycle). `level-loader.js` movable-entity placeholders carry
+**pixel** `x,y` (Phase-6 coord reconciliation). Tests: `test-config.js` (17),
+`test-world.js` (35), `test-level-loader.js` (40), `test-level-content.js` (79),
+`test-level-generator.js` (20), `test-level-integration.js` (16),
+`test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17) — all
+green (**351 checks total**). Subsystems #1 and #2 complete (SPEC-PLAYER
+Phases 1–7 all done: config data, world.js collision seam, loader coord-keyed
+plate press + emit export, input.js, player.js core, carry system, fire +
+projectiles.js).
 
 ## Implementation sequencing (agreed order)
 
@@ -391,6 +398,56 @@ fixed by invented design (per CLAUDE.md "surface, don't invent"):
    into a 1-thick wall can vault across it even when the player meant to slide
    along the perpendicular axis. Parallel movement (dominant axis perpendicular to
    the wall) is safe. A "both axes blocked" or intent gate would tighten it.
+
+### 2026-07-05 — `projectiles.js` seam: player→factory (one-way), owner-tag, owner-scoped cap, audio leaf — Phase 7 (SPEC-PLAYER)
+`projectiles.js` is the first occupant of subsystem-#2's shot module and the
+last cross-module edge of the player build. Decisions:
+- **player → projectiles is one-way (§11).** `player.js` imports `makeShot` +
+  `updateShots` from `projectiles.js`; `projectiles.js` imports config/state/world
+  ONLY and **never** imports `player.js`. The shooter is a **string `owner` tag**
+  (`"player"`) on the Shot, not a back-reference — so enemy arrows / shrapnel join
+  the same `G.shots` array later behind the same shape with `owner:"enemy"`. This
+  **updates the Phase-5 import-discipline rule**: `player.js` now legitimately
+  imports `projectiles.js` (still NOT abilities/enemies/combat). The
+  `test-player.js` grep was updated accordingly (allow `projectiles.js`; still
+  forbid abilities/enemies/combat/audio).
+- **Owner-scoped cap (key ADD divergence).** The volley gate counts
+  `owner==="player"` shots on screen, **NOT** `G.shots.length` (ADD's rule) — enemy
+  shots will share `G.shots` and must not consume the player's cap. Asserted by a
+  test that seeds an `owner:"enemy"` shot and confirms it doesn't block a player
+  volley.
+- **Two-source ricochet (the §12.5 escalation risk — passed first pass, no Opus
+  escalation).** `updateShots` reflects per-axis (ADD pattern) off **two** sources:
+  **crates always** ricochet ALL straight projectiles (even non-bounce, §7.1.1/
+  §13.23) retaining owner+dmg with range NOT reset; the **Bounce power-up
+  additionally** ricochets off `isWall`-solid tiles (walls/tombstones/pillars/
+  closed doors), range NOT reset, `bounceCount++`. A **non-bounce** shot reflects
+  off crates but **expires** on first wall contact. **bounceCount asymmetry:** per
+  §8's explicit wording, a crate ricochet does **not** increment `bounceCount`
+  (it's the Bounce-power-up wall tally for future achievements); only Bounce-wall
+  reflections do. Flagged here as an interpretation of §8, not invented design.
+  Crate detection is tile-based (`crateAt`, reads `G.crates` only — barrels don't
+  ricochet, they're deferred combat objects).
+- **Audio is a leaf seam (§10).** `player.js` calls `sfx.shoot()` once per trigger
+  through a `registerSfx(handlers)` seam (default no-op `{shoot(){}}`); it never
+  imports `audio.js` (a later leaf subsystem). Same register-callbacks shape as the
+  ability seam. **Owed by audio (#11):** register real `sfx.*` handlers at boot.
+- **"Fired while carrying" ordering guard (§11).** The frame loop captures
+  `wasCarrying = loco==="CARRYING"` **before** the carry step and skips `tryFire`
+  when true — so a stationary release-toss (which returns to NORMAL the same frame)
+  can't ALSO fire a shot from the same held-fire input. VAULTING is already
+  fire-blocked by the outer short-circuit; STUN force-drops before move so a
+  stunned player is NORMAL (and CAN fire, §2.5). Tested: cannot-fire-while-CARRYING,
+  can-fire-while-STUNNED, cannot-fire-while-VAULTING.
+
+### 2026-07-05 — S1 (`G.powerups` keys) resolution APPLIED — Phase 7
+The Phase-1 S1 ruling (canonical keys `triple/big/fast/bounce`, no `Shot` suffix)
+is now **exercised in live code**: `tryFire` reads `G.powerups.triple/big/fast/
+bounce` and decrements each active counter by 1 per trigger. Fetched ADD source
+uses `rapid` (not `fast`) and `G.shots.length` (not owner-scoped) — both
+intentional Repossessed divergences (Fast substitutes ADD's Rapid; cap is
+owner-scoped), applied as flagged, not papered over. No conflict surfaced against
+the local `state.js` contract.
 
 ## Known open items (non-blocking for build)
 
@@ -800,3 +857,45 @@ Q-P3/Q-P4 adopted behaviors; and two emergent **play-feel** edges flagged (not
 fixed): toss-into-wall re-pickup oscillation, and diagonal wall-vault on the
 dominant axis. **§2 build-status box NOT flipped to BUILT** (ranged fire +
 projectiles, Phase 7, still pending). No git.
+
+### 2026-07-05 — SPEC-PLAYER Phase 7 (`projectiles.js` + player.js fire hook) — subsystem #2 complete
+
+Built `src/projectiles.js` (new, ~3KB, one concern — player shots) and filled the
+Phase-5 fire stub in `player.js` (`tryFire` + `spawnVolley`, ~23KB). Removed the
+local `updateShots` stub — `player.js` now imports `updateShots` (+ `makeShot`)
+from `projectiles.js` (one-way; `projectiles.js` imports config/state/world only).
+Added a `registerSfx` audio leaf seam. **§2 (Player) and §7.1 (crates) build-status
+boxes flipped to BUILT; barrels §7.2 remain deferred to SPEC-BARRELS.**
+
+Implements (§7 fire, §8 shots):
+- **Fire hook (§7).** Runs only in NORMAL. Per-trigger flags `tri/big/fast/bn`
+  from `G.powerups.triple/big/fast/bounce`. `cap = baseMax(3) + (fast?3:0) +
+  (tri?3:0)`; `cooldown = 0.25 / (fast?2:1)`; `volley = tri?3:1`. Gate: `fireHeld
+  && cooldown≤0 && playerShotCount + volley ≤ cap`, **playerShotCount counts
+  `owner==="player"` only** (not `G.shots.length` — enemy arrows share the array
+  later). On fire: spawn volley, set cooldown, decrement each active counter by 1,
+  `sfx.shoot()` once, emit `player:fired`. Volley muzzles + travels along each
+  fan angle (single = aim; Triple = ∓Δ/0/+Δ, Δ=0.2094); Big is TWO independent
+  multipliers (r×1.6 AND dmg×2). Facing = fire dir on a firing frame (§2).
+- **`makeShot` factory (§2 shape):** `{x,y,vx,vy,r,dmg,traveled,owner,bounce,
+  bounceCount}` — no ADD extras.
+- **`updateShots` (§8):** integrate, `traveled += |step|`, expire at range(224);
+  non-bounce also expires on first wall. Two-source per-axis ricochet (crates
+  always / Bounce-walls) — see Architecture note above.
+
+Tests: `test-projectiles.js` (new, 17 checks — range expiry / non-bounce dies on
+wall & doesn't reflect / Bounce reflects off wall + crate retaining owner+dmg,
+range-not-reset, bounceCount++ / non-bounce crate-always ricochet with no
+bounceCount) + extended `test-player.js` (88→108 — base gate + cooldown, Triple
+fan ∓12°, Fast half-cooldown +3 cap, Big dmg2/r×1.6, all-four-decrement, bounce
+flag, cannot-fire-CARRYING, can-fire-STUNNED, cannot-fire-VAULTING, owner-scoped
+cap). **Full suite green, 351 checks** (config 17 / world 35 / level-loader 40 /
+level-content 79 / level-generator 20 / level-integration 16 / input 19 /
+player 108 / projectiles 17).
+
+**Escalation trigger NOT hit:** the phase flagged the two-source ricochet + owner-
+scoped cap (§12.5 tests 4 & 5) as the Opus-escalation risk — both passed on the
+first implementation pass. **No spec gaps requiring invented design;** the S1
+`G.powerups`-keys ruling was applied in live code and the ADD divergences
+(Fast-for-Rapid, owner-scoped cap, crate-always ricochet) applied as flagged. One
+§8 interpretation logged (crate ricochet doesn't bump `bounceCount`). No git.

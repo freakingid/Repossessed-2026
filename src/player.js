@@ -3,26 +3,31 @@
    overlays, world hooks (plate press / key spend), and the damage/heal/
    knockback sinks. (SPEC-PLAYER §2, §4, §5, §6, §10.)
 
-   THIS PHASE (5) builds the load-bearing FRAME-UPDATE ORDERING SKELETON plus
-   NORMAL locomotion, overlays, and the entry-point sinks. Carry (pickup/toss/
-   vault ENTRY — Phase 6) and fire/volley + shot motion (Phase 7) are wired as
-   NAMED STUB HOOKS in their correct ordering slots; they are filled later.
+   COMPLETE (SPEC-PLAYER Phases 5–7): the load-bearing FRAME-UPDATE ORDERING
+   SKELETON, NORMAL locomotion + overlays + sinks (Phase 5), the crate carry
+   system (pickup/toss/drop-vault/wall-vault/STUN-drop, Phase 6), and the ranged
+   fire hook (tryFire volley gate + power-up decrement, Phase 7 — shot MOTION/
+   ricochet lives in projectiles.js, imported as makeShot/updateShots).
 
    PURE-FUNCTION BOUNDARY (§11): updatePlayer takes the input snapshot as an
    ARGUMENT — it never reaches into input's device glue or any canvas. Tests
    feed synthetic snapshots. The production per-frame entry `tickPlayer(dt)`
    pulls the live snapshot from input.js and delegates to updatePlayer.
 
-   IMPORT DISCIPLINE (§11): imports config/state/world/level-loader/input ONLY.
-   It must NOT import abilities/enemies/projectiles — those reach INTO player
-   via register-callbacks (abilities registry) or call player's sinks directly
-   (enemies/#4 own the melee loop). See STATUS.md architecture decisions.
+   IMPORT DISCIPLINE (§11): imports config/state/world/level-loader/input plus
+   the projectiles shot factory (one-way — projectiles.js imports config/state/
+   world only, never player; the shot's shooter is a string `owner` tag, not a
+   back-reference). It must NOT import abilities/enemies/combat — those reach
+   INTO player via register-callbacks (abilities registry) or call player's sinks
+   directly (enemies/#4 own the melee loop). Audio is a leaf seam (registerSfx;
+   player.js never imports audio.js). See STATUS.md architecture decisions.
    ========================================================================= */
 import { CFG } from "./config.js";
 import { G } from "./state.js";
 import { moveBody, bodyHitsWall, isWall, map as worldMap } from "./world.js";
 import { setPlatePressedAt, openLockedDoor, markNavDirty, emit } from "./level-loader.js";
 import { getSnapshot } from "./input.js";
+import { makeShot, updateShots } from "./projectiles.js";
 
 /* ---- Ability seam (§10, register-callbacks) ------------------------------
    input.nova/input.lightning are edge-triggered here and routed to a
@@ -31,6 +36,16 @@ import { getSnapshot } from "./input.js";
 const abilityHandlers = { nova: () => {}, lightning: () => {} };
 export function registerAbility(name, fn) {
   abilityHandlers[name] = typeof fn === "function" ? fn : () => {};
+}
+
+/* ---- Audio seam (§10, leaf) ----------------------------------------------
+   player.js calls sfx.* behind a seam but never imports audio.js (a later leaf
+   subsystem). Default no-ops; audio.js registers real handlers at boot via
+   registerSfx. Keeps player.js's import graph gameplay-free (config/state/world/
+   level-loader/input/projectiles only). */
+const sfx = { shoot() {} };
+export function registerSfx(handlers) {
+  if (handlers && typeof handlers === "object") Object.assign(sfx, handlers);
 }
 
 // Edge-detect state for the ability triggers (reset by initPlayer).
@@ -97,15 +112,21 @@ export function updatePlayer(snapshot, dt) {
   } else {
     // 3. move + collision (+ plate press / key spend)
     doMovement(p, snapshot, dt);
-    // 4. carry actions (pickup / release / vault ENTRY) — STUB (Phase 6)
+    // 4. carry actions (pickup / release / vault ENTRY)
+    //    Capture CARRYING *before* the carry step: while CARRYING the fire input
+    //    is repurposed as RELEASE (§7), so even if a stationary release tosses
+    //    the crate and returns to NORMAL this same frame, fire must NOT also
+    //    trigger — "fired while carrying" is the §11-flagged ordering bug.
+    const wasCarrying = p.loco === "CARRYING";
     carryActions(p, snapshot, dt);
     // 5. abilities (edge-triggered; locked while stunned) — §10
     tryAbilities(p, snapshot);
-    // 6. fire / volley — STUB (Phase 7)
-    tryFire(p, snapshot, dt);
+    // 6. fire / volley (§7) — only in NORMAL; suppressed the frame a carry was
+    //    released so the fire input can't double as toss + shot.
+    if (!wasCarrying) tryFire(p, snapshot, dt);
   }
 
-  // 7. shots update — STUB (Phase 7 owns projectiles.js)
+  // 7. shots update — projectiles.js owns motion/range/ricochet (§8)
   updateShots(dt);
 }
 
@@ -165,7 +186,9 @@ function doMovement(p, snap, dt) {
   // knockback is integrated SEPARATELY and still respects collision (§4.1, P4).
   integrateKnockback(p, dt);
 
-  // facing = aim while not firing (fire is a Phase-7 stub ⇒ always aim here).
+  // facing = aim here; tryFire (§7, later this frame) overrides it to the fire
+  // direction on a frame the player fires (§2: aim while not firing, fire dir
+  // while firing).
   p.angle = Math.atan2(aim.y, aim.x);
 
   // world hook: pressure-plate press by weight, keyed on final body position.
@@ -542,16 +565,70 @@ export function isCarryingCrate() {
 }
 
 /* =========================================================================
-   STUB HOOKS — filled by Phase 7; present now so the ordering skeleton is
-   correct and complete (§11 "wire the stub hooks in their correct slots now").
+   Ranged fire (§7) — the volley gate + per-trigger power-up decrement. Shot
+   MOTION/range/ricochet is projectiles.js (imported updateShots); this owns the
+   fire decision + volley spawn only. Runs only in NORMAL (CARRYING repurposes
+   the input as release, VAULTING/DEAD can't act); STUNNED *allows* fire (§2.5)
+   but can't be CARRYING since stun force-drops.
    ========================================================================= */
+function tryFire(p, snap, dt) {
+  if (p.loco !== "NORMAL") return;         // fire only in NORMAL (§7)
+  if (!snap.fireHeld) return;
+  if (p.cooldown > 0) return;
 
-// Ranged fire + volley gate + power-up decrement. Phase 7 fills this. Fire runs
-// only in NORMAL (CARRYING repurposes the input, VAULTING/DEAD can't act). No-op now.
-function tryFire(p, snap, dt) { /* Phase 7 — ranged fire (§7) */ }
+  // Per-trigger power-up flags (§7, P1). Empty G.powerups ⇒ base fire.
+  const pu   = G.powerups || (G.powerups = {});
+  const tri  = pu.triple > 0;
+  const big  = pu.big    > 0;
+  const fast = pu.fast   > 0;
+  const bn   = pu.bounce > 0;
 
-// Player-shot motion / range / ricochet. Phase 7 (projectiles.js) fills this. No-op now.
-function updateShots(dt) { /* Phase 7 — projectiles.js (§8) */ }
+  const cap    = CFG.SHOT.baseMax + (fast ? 3 : 0) + (tri ? 3 : 0);
+  const volley = tri ? 3 : 1;
+
+  // Owner-scoped cap: count ONLY owner==="player" shots on screen — NOT
+  // G.shots.length. Enemy arrows share G.shots later and must not consume the
+  // player's cap (the key divergence from ADD).
+  const shots = G.shots || (G.shots = []);
+  let playerShotCount = 0;
+  for (const s of shots) if (s.owner === "player") playerShotCount++;
+  if (playerShotCount + volley > cap) return;
+
+  // GATE passed — spawn, set cooldown, decrement each active counter by 1.
+  spawnVolley(p, snap.aim || { x: 1, y: 0 }, tri, big, bn);
+  p.cooldown = CFG.SHOT.cooldown / (fast ? 2 : 1);
+  if (tri)  pu.triple--;
+  if (big)  pu.big--;
+  if (fast) pu.fast--;
+  if (bn)   pu.bounce--;
+
+  sfx.shoot();   // one bloop per trigger, not per pellet (audio leaf seam, §10)
+  emit("player:fired", { x: p.x, y: p.y, tx: (p.x / CFG.TILE) | 0, ty: (p.y / CFG.TILE) | 0 });
+}
+
+// Spawn the volley via the projectiles factory. Single shot along aim, or a
+// Triple fan at angle∓Δ, angle, angle+Δ (Δ = CFG.SHOT.spread, ±12°). Each shot
+// muzzles + travels along its OWN fan angle (so Triple genuinely diverges);
+// Big is two INDEPENDENT multipliers — hitbox ×1.6 AND damage ×2 (P1).
+function spawnVolley(p, aim, tri, big, bn) {
+  const a = unit(aim);
+  const base = Math.atan2(a.y, a.x);
+  p.angle = base;                          // facing = fire dir while firing (§2)
+  const angles = tri
+    ? [base - CFG.SHOT.spread, base, base + CFG.SHOT.spread]
+    : [base];
+  const r   = CFG.SHOT.r * (big ? CFG.SHOT.bigRadiusMult : 1);
+  const dmg = 1 * (big ? CFG.SHOT.bigDmgMult : 1);
+  const off = p.r + CFG.SHOT.muzzle;
+  for (const ang of angles) {
+    const dx = Math.cos(ang), dy = Math.sin(ang);
+    G.shots.push(makeShot({
+      x: p.x + dx * off, y: p.y + dy * off,
+      vx: dx * CFG.SHOT.speed, vy: dy * CFG.SHOT.speed,
+      r, dmg, owner: "player", bounce: bn,
+    }));
+  }
+}
 
 // Force-drop of a carried crate (STUN, §5.2) — runs BEFORE move resolves
 // (updatePlayer step 2). Settles the crate in place on the player's current tile

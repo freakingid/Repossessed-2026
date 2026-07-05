@@ -537,15 +537,142 @@ initPlayer();
 }
 
 /* ========================================================================= *
+   11. Ranged fire gate + power-ups (§12.4)
+ * ========================================================================= */
+// Seed n stationary shots at the player centre (a floor tile) so updateShots
+// neither moves nor expires them — pure on-screen-count fixtures for the cap.
+function seedShots(n, owner = "player") {
+  const arr = [];
+  for (let k = 0; k < n; k++)
+    arr.push({ x: G.player.x, y: G.player.y, vx: 0, vy: 0, r: CFG.SHOT.r, dmg: 1,
+      traveled: 0, owner, bounce: false, bounceCount: 0 });
+  return arr;
+}
+const playerShots = () => G.shots.filter((s) => s.owner === "player").length;
+
+// --- base fire: one shot, cooldown set, cooldown then gates a second volley ---
+openWorld();
+placePlayer(5, 5);
+G.powerups = {}; G.player.cooldown = 0; G.shots = [];
+{
+  updatePlayer(snap({ fireHeld: true, aim: { x: 1, y: 0 } }), 0.001);
+  check("base fire spawns exactly 1 player shot", playerShots() === 1);
+  check("base fire sets cooldown to CFG.SHOT.cooldown (0.25)", approx(G.player.cooldown, CFG.SHOT.cooldown));
+  const before = playerShots();
+  updatePlayer(snap({ fireHeld: true }), 0.016);          // cooldown still > 0
+  check("cooldown gates a second immediate volley", playerShots() === before);
+}
+
+// --- base cap of 3 blocks a 4th shot ---
+placePlayer(5, 5);
+G.powerups = {}; G.player.cooldown = 0;
+G.shots = seedShots(3, "player");
+{
+  updatePlayer(snap({ fireHeld: true }), 0.001);
+  check("base cap 3 blocks a 4th shot (count+volley ≤ cap)", playerShots() === 3);
+}
+
+// --- Triple: 3 shots fanned at −12°, 0, +12°; decrements its counter ---
+placePlayer(5, 5);
+G.powerups = { triple: 5 }; G.player.cooldown = 0; G.shots = [];
+{
+  updatePlayer(snap({ fireHeld: true, aim: { x: 1, y: 0 } }), 0.001);
+  const ps = G.shots.filter((s) => s.owner === "player");
+  const angs = ps.map((s) => Math.atan2(s.vy, s.vx)).sort((a, b) => a - b);
+  check("Triple spawns 3 shots", ps.length === 3);
+  check("Triple fan at ∓12° around aim",
+    angs.length === 3 && approx(angs[0], -CFG.SHOT.spread) && approx(angs[1], 0) && approx(angs[2], CFG.SHOT.spread));
+  check("Triple decrements its counter by 1", G.powerups.triple === 4);
+}
+
+// --- Fast: halves cooldown and +3 cap; decrements ---
+placePlayer(5, 5);
+G.powerups = { fast: 5 }; G.player.cooldown = 0; G.shots = [];
+{
+  updatePlayer(snap({ fireHeld: true }), 0.001);
+  check("Fast halves cooldown to 0.125", approx(G.player.cooldown, CFG.SHOT.cooldown / 2));
+  check("Fast decrements its counter by 1", G.powerups.fast === 4);
+}
+placePlayer(5, 5);
+G.powerups = { fast: 5 }; G.player.cooldown = 0;
+G.shots = seedShots(5, "player");                          // base cap 3 would block; Fast cap = 6
+{
+  updatePlayer(snap({ fireHeld: true }), 0.001);
+  check("Fast +3 cap allows a 6th shot on screen", playerShots() === 6);
+}
+
+// --- Big: dmg 2 and r × 1.6 (two INDEPENDENT multipliers); decrements ---
+placePlayer(5, 5);
+G.powerups = { big: 3 }; G.player.cooldown = 0; G.shots = [];
+{
+  updatePlayer(snap({ fireHeld: true }), 0.001);
+  const s0 = G.shots.find((s) => s.owner === "player");
+  check("Big sets dmg = 2", s0 && s0.dmg === 2);
+  check("Big sets r = CFG.SHOT.r × 1.6", s0 && approx(s0.r, CFG.SHOT.r * CFG.SHOT.bigRadiusMult));
+  check("Big decrements its counter by 1", G.powerups.big === 2);
+}
+
+// --- one trigger decrements EVERY active counter by exactly 1; bounce flag set ---
+placePlayer(5, 5);
+G.powerups = { triple: 5, big: 5, fast: 5, bounce: 5 }; G.player.cooldown = 0; G.shots = [];
+{
+  updatePlayer(snap({ fireHeld: true }), 0.001);
+  check("each trigger decrements all four active counters by exactly 1",
+    G.powerups.triple === 4 && G.powerups.big === 4 && G.powerups.fast === 4 && G.powerups.bounce === 4);
+  check("Bounce power-up sets bounce=true on every shot",
+    G.shots.filter((s) => s.owner === "player").every((s) => s.bounce === true));
+}
+
+// --- cannot fire while CARRYING (fire input is the release command) ---
+placePlayer(5, 5);
+G.crates = []; G.powerups = {}; G.player.cooldown = 0; G.shots = [];
+G.player.loco = "CARRYING"; G.player.carry = { type: "crate", entity: {} };
+{
+  updatePlayer(snap({ fireHeld: true, move: { x: 0, y: 0 }, aim: { x: 1, y: 0 } }), 0.001);
+  check("cannot fire while CARRYING — no player shot spawned", playerShots() === 0);
+  check("CARRYING + fire released the crate (back to NORMAL)", G.player.loco === "NORMAL");
+}
+
+// --- can fire while STUNNED (stun allows fire; can't be CARRYING) ---
+placePlayer(5, 5);
+G.powerups = {}; G.player.cooldown = 0; G.shots = [];
+G.player.loco = "NORMAL"; G.player.stun = 1.0;
+{
+  updatePlayer(snap({ fireHeld: true, aim: { x: 1, y: 0 } }), 0.001);
+  check("can fire while STUNNED", playerShots() === 1);
+}
+
+// --- VAULTING short-circuits fire ---
+placePlayer(5, 5);
+G.powerups = {}; G.player.cooldown = 0; G.shots = [];
+G.player.loco = "VAULTING";
+G.player.vault = { t: 0, dur: CFG.PLAYER.vaultDur, from: { x: G.player.x, y: G.player.y }, to: { x: G.player.x + 32, y: G.player.y } };
+{
+  updatePlayer(snap({ fireHeld: true }), 0.001);
+  check("cannot fire while VAULTING", playerShots() === 0);
+}
+
+// --- owner-scoped cap: enemy shots don't consume the player's cap ---
+placePlayer(5, 5);
+G.powerups = {}; G.player.cooldown = 0;
+G.shots = [...seedShots(2, "player"), ...seedShots(1, "enemy")];   // 2 player + 1 enemy, cap 3
+{
+  updatePlayer(snap({ fireHeld: true }), 0.001);
+  check("owner-scoped cap: an enemy shot does not consume the player cap (fires to 3 player)",
+    playerShots() === 3);
+}
+
+/* ========================================================================= *
    10. Import discipline (§11) — config/state/world/level-loader/input ONLY
  * ========================================================================= */
 const src = readFileSync(new URL("./src/player.js", import.meta.url), "utf8");
 const imports = [...src.matchAll(/from\s+["'](.+?)["']/g)].map((m) => m[1]);
-const allowed = new Set(["./config.js", "./state.js", "./world.js", "./level-loader.js", "./input.js"]);
-check("player.js imports only config/state/world/level-loader/input",
+const allowed = new Set(["./config.js", "./state.js", "./world.js", "./level-loader.js",
+  "./input.js", "./projectiles.js"]);
+check("player.js imports only config/state/world/level-loader/input/projectiles",
   imports.length > 0 && imports.every((p) => allowed.has(p)));
-check("player.js does not import abilities/enemies/projectiles/combat",
-  imports.every((p) => !/(abilities|enemies|projectiles|combat)/.test(p)));
+check("player.js does not import abilities/enemies/combat/audio",
+  imports.every((p) => !/(abilities|enemies|combat|audio)/.test(p)));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
