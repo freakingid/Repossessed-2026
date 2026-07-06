@@ -28,8 +28,8 @@
    ========================================================================= */
 import { CFG } from "./config.js";
 import { G } from "./state.js";
-import { moveBody, bodyHitsWall, bodyHitsBlocker, hasLineOfSight } from "./world.js";
-import { findPath, consumeDirtyTiles, getNavVersion } from "./nav.js";
+import { moveBody, bodyHitsWall, bodyHitsBlocker, hasLineOfSight, randomFloorTile } from "./world.js";
+import { findPath, consumeDirtyTiles, getNavVersion, NAV_MASK } from "./nav.js";
 
 /* ---- Navigator registry ------------------------------------------------- *
    navList is the ordered registry the round-robin cursor walks; recByEntity
@@ -450,4 +450,130 @@ export function updateBat(e, player, dt) {
     s.pauseT -= dt;
     if (s.pauseT <= 0) s.phase = "snapshot";
   }
+}
+
+/* ---- Zombie: pure GROUND A*, omniscient, never stops (§6.1.7) ----------- *
+   The proof-of-life for a real A* consumer of the Phase-2 layer: register as a
+   GROUND navigator at spawn and let scheduleRepaths/steerNavigator (§3) do all
+   the work — no FSM, no ranged, just the spine's melee/death. Registration
+   happens once, lazily, on first update (enemies.js's factory doesn't import
+   enemies-ai's registry directly to keep the roster-registration surface in
+   one place: here, next to the updater that needs it). */
+export function updateZombie(e, player, dt) {
+  if (!recByEntity.has(e)) addNavigator(e, NAV_MASK.GROUND, groundMover);
+  steerNavigator(e, player, dt);
+}
+
+/* ---- Skeleton Shooter: GROUND A*, FSM WANDER -> HUNT (§6.1.3) ----------- *
+   WANDER (unaware): slow ambient roam toward an occasionally-picked random
+   reachable waypoint (registered as a GROUND navigator so it rides the same
+   repath/steer machinery as HUNT — the "goal" is just the wander waypoint
+   instead of the player). Each losT tick (throttled, ADD losCheckEvery
+   convention) tests hasLineOfSight; on acquire -> HUNT.
+   HUNT: full GROUND A* toward the player (the navigator's goal becomes the
+   player automatically once steerNavigator's caller passes the player as the
+   target — see wanderGoal below). Stays aware awareDecay(8s) after losing LOS,
+   then reverts to WANDER. Within los(6t) AND LOS, each decision tick rolls
+   stop-to-shoot (G.ramp.shooterStopToShoot); on a hit it halts for the
+   windup/fire/cooldown sequence, STATIONARY THROUGHOUT (the one thing to get
+   exactly right per the phase brief) — the nav layer is not stepped at all
+   while shootPhase is active, so no steer call can move it mid-sequence. */
+const LOS_CHECK_EVERY = 0.12;   // ADD convention (reused elsewhere, e.g. Lobber)
+const WANDER_PICK_EVERY = 3.0;  // s — how often WANDER re-rolls a waypoint (proposed, ambient roam pace)
+
+function initShooterState(e) {
+  const s = e.shooter || (e.shooter = {});
+  if (s.state === undefined) {
+    s.state = "wander";        // "wander" | "hunt"
+    s.awareT = 0;
+    s.losT = 0;
+    s.shootPhase = null;       // null | "windup" | "cooldown"
+    s.shootT = 0;
+    s.wanderGoal = null;       // {x,y} pixel — a random reachable waypoint
+    s.wanderPickT = 0;
+  }
+  return s;
+}
+
+// Enemy straight arrow — mints via the same registered seam pattern as the
+// Spider's web (enemies-ai.js never imports projectiles/G.shots directly, R6).
+let shooterFire = () => {};
+export function registerShooterFire(fn) { shooterFire = fn; }
+
+export function updateSkeletonShooter(e, player, dt) {
+  const cfg = CFG.ENEMY.skeletonShooter;
+  const s = initShooterState(e);
+  if (!recByEntity.has(e)) addNavigator(e, NAV_MASK.GROUND, groundMover);
+
+  // Shoot sequence is STATIONARY THROUGHOUT — no steering/nav call at all while
+  // windup or cooldown is active (the halt happens the instant the roll hits;
+  // this function returns before any movement code runs).
+  if (s.shootPhase != null) {
+    s.shootT -= dt;
+    if (s.shootPhase === "windup" && s.shootT <= 0) {
+      const dx = player.x - e.x, dy = player.y - e.y;
+      const d = Math.hypot(dx, dy) || 1;
+      shooterFire(e, dx / d, dy / d);
+      s.shootPhase = "cooldown";
+      s.shootT = cfg.cooldown;
+    } else if (s.shootPhase === "cooldown" && s.shootT <= 0) {
+      s.shootPhase = null;
+    }
+    return;   // stationary: no WANDER/HUNT movement this frame
+  }
+
+  const dx = player.x - e.x, dy = player.y - e.y;
+  const dist = Math.hypot(dx, dy);
+  const losRange = cfg.los * CFG.TILE;
+
+  if (s.state === "wander") {
+    s.losT -= dt;
+    if (s.losT <= 0) {
+      s.losT = LOS_CHECK_EVERY;
+      if (dist <= losRange && hasLineOfSight(e.x, e.y, player.x, player.y)) {
+        s.state = "hunt";
+        s.awareT = cfg.awareDecay;
+        s.wanderGoal = null;
+      }
+    }
+    if (s.state === "wander") {
+      s.wanderPickT -= dt;
+      if (s.wanderGoal == null || s.wanderPickT <= 0) {
+        s.wanderGoal = randomFloorTile(0);
+        s.wanderPickT = WANDER_PICK_EVERY;
+      }
+      steerNavigator(e, s.wanderGoal, dt);
+      return;
+    }
+  }
+
+  // HUNT: full GROUND A* toward the player. Track awareness independently of
+  // LOS every frame (the nav path itself is toward the live player position).
+  s.losT -= dt;
+  let hasLOS = false;
+  if (s.losT <= 0) {
+    s.losT = LOS_CHECK_EVERY;
+    hasLOS = dist <= losRange && hasLineOfSight(e.x, e.y, player.x, player.y);
+    if (hasLOS) s.awareT = cfg.awareDecay;
+  }
+  s.awareT -= dt;
+  if (s.awareT <= 0) {
+    s.state = "wander";
+    s.wanderGoal = null;
+    steerNavigator(e, player, dt);   // finish this frame's motion before switching next tick
+    return;
+  }
+
+  // Within stop-to-shoot range AND (throttled) LOS, roll the ramped probability
+  // each decision tick (i.e. each losT throttle tick, not every frame — matches
+  // the "each decision tick" wording without re-rolling 60x/s).
+  if (s.losT === LOS_CHECK_EVERY && dist <= losRange && hasLOS) {
+    const prob = (G.ramp && G.ramp.shooterStopToShoot) || 0.5;
+    if (Math.random() < prob) {
+      s.shootPhase = "windup";
+      s.shootT = cfg.windup;
+      return;   // halts immediately — no movement this or subsequent frames until fired
+    }
+  }
+  steerNavigator(e, player, dt);
 }

@@ -39,7 +39,8 @@ import { emit, registerEntityFactory } from "./level-loader.js";
 import { makeShot } from "./projectiles.js";
 import {
   scheduleRepaths, groundMover, updateGhost, updateSkeleton, updateSpider,
-  updateBat, registerSpiderWebFire,
+  updateBat, updateZombie, updateSkeletonShooter, registerSpiderWebFire,
+  registerShooterFire, removeNavigator,
 } from "./enemies-ai.js";
 
 // Spider web-fire seam (§6.1.6) — enemies-ai.js's updateSpider calls this to
@@ -56,6 +57,19 @@ registerSpiderWebFire((e, ux, uy) => {
   }));
 });
 
+// Skeleton Shooter arrow-fire seam (§6.1.3) — same register-callback shape as
+// the Spider's web (enemies-ai.js never imports projectiles/G.shots, R6).
+registerShooterFire((e, ux, uy) => {
+  const cfg = CFG.ENEMY.skeletonShooter.arrow;
+  G.shots.push(makeShot({
+    x: e.x, y: e.y,
+    vx: ux * cfg.speedMul * CFG.PLAYER.speed,
+    vy: uy * cfg.speedMul * CFG.PLAYER.speed,
+    r: 6, dmg: cfg.dmg, owner: "enemy",
+    maxTravel: cfg.range * CFG.TILE, effect: "damage",
+  }));
+});
+
 /* ---- Per-type AI dispatch (step 6) -------------------------------------- *
    Keyed by entity type. Later phases add their updater here; this phase ships
    only the Ghost. Each handler is (e, player, dt) => void and does the type's
@@ -65,6 +79,8 @@ const aiByType = new Map([
   ["skeleton", updateSkeleton],
   ["spider", updateSpider],
   ["bat", updateBat],
+  ["zombie", updateZombie],
+  ["skeletonShooter", updateSkeletonShooter],
 ]);
 
 // Test seam (structural R2 frame-order proof): inject a synthetic type's AI so a
@@ -118,6 +134,12 @@ registerEntityFactory("spider", makeSpider);
 
 export function makeBat(p) { return makeEnemy("bat", p); }
 registerEntityFactory("bat", makeBat);
+
+export function makeZombie(p) { return makeEnemy("zombie", p); }
+registerEntityFactory("zombie", makeZombie);
+
+export function makeSkeletonShooter(p) { return makeEnemy("skeletonShooter", p); }
+registerEntityFactory("skeletonShooter", makeSkeletonShooter);
 
 /* =========================================================================
    THE SPINE
@@ -252,6 +274,7 @@ function deathSweep() {
     awardKill(e, cause);
     emit("enemy:killed", { type: e.type, x: e.x, y: e.y, points: e.points, cause });
     if (e.contact) clearMeleePair(e);
+    if (e.nav) removeNavigator(e);   // drop the A* registry entry (Zombie/Shooter/Wraith/Reaper)
     enemies.splice(i, 1);
   }
 }

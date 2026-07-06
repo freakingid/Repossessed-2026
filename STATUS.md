@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 4 — **direct-steer roster added: Skeleton, Spider, Bat** (§6.1.2/§6.1.5/§6.1.6), riding the Phase-3 spine unchanged. `updateSkeleton`/`updateSpider`/`updateBat` added to `enemies-ai.js`; `makeSkeleton`/`makeSpider`/`makeBat` factories added to `enemies.js` and registered via `registerEntityFactory`. Skeleton wall-slide corner probe (±90°, STICKY lean commit — see decision log), Spider burst/pause/retreat/web FSM (a **design decision surfaced and resolved**: Spider has no base `speedMul`, §6 below), Bat SNAPSHOT→FLY→PAUSE raw-integrate (R8). Shared blocked-ε (Q4, 10%) factored into `enemies-ai.js`. `test-enemies-steer.js` (24) green; suite **521 total**. Roster still owed: Skeleton Shooter, Lobber, Zombie, Fire Wraith, the Reaper, and spawners/arced ordnance.)
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 5 — **GROUND A\* roster added: Skeleton Shooter, Zombie** (§6.1.3/§6.1.7), the first roster members to actually ride the Phase-2 nav consumer layer end-to-end. `updateSkeletonShooter`/`updateZombie` added to `enemies-ai.js`; `makeSkeletonShooter`/`makeZombie` factories added to `enemies.js`, registered via `registerEntityFactory`, and dispatched in `aiByType`. Zombie is pure `addNavigator`+`steerNavigator` (no FSM) — proof the scheduler/steering built in Phase 2 drives a real entity. Skeleton Shooter is FSM WANDER→HUNT (LOS-acquire, awareDecay 8s, ambient-roam waypoints via `world.randomFloorTile`) with a stationary halt→windup(0.4s)→fire→cooldown(1.5s) shoot sequence gated on `G.ramp.shooterStopToShoot`; arrow fired via a registered `registerShooterFire` seam (same shape as the Spider's web) so `enemies-ai.js` still never imports `projectiles.js`/`G.shots` (R6). **Bug found and fixed in the same phase:** the death sweep never called `removeNavigator`, so any A\*-registered enemy (Zombie/Shooter now, Wraith/Reaper later) would leak a stale entry in `enemies-ai.js`'s navigator registry on death — fixed by calling `removeNavigator(e)` in `deathSweep` when `e.nav` exists (see decision log). `test-enemies-ground.js` (15) green; suite **536 total**. Roster still owed: Lobber, Fire Wraith, the Reaper, spawners, and arced ordnance.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
 incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
@@ -89,9 +89,22 @@ current or the next session starts blind.
   Bat (§6.1.5, R8): SNAPSHOT→FLY→PAUSE, FLY is a **raw position add, never
   `moveBody`** (flies through walls by design). Shared blocked-ε (Q4, 10% of
   intended step) factored out as `isBlocked` in `enemies-ai.js`, used by both
-  Skeleton and Spider. Tests: `test-enemies-steer.js` (24, green). Roster still
-  owed: Skeleton Shooter, Lobber, Zombie, Fire Wraith, the Reaper, spawners
-  (E4), arced ordnance/`updateEbolts` (E1), and the Reaper PHANTOM mover (R4).
+  Skeleton and Spider. Tests: `test-enemies-steer.js` (24, green). **Phase 5
+  (GROUND A\* roster) BUILT** — Skeleton Shooter (§6.1.3) and Zombie (§6.1.7)
+  added to `enemies-ai.js` (`updateSkeletonShooter`/`updateZombie`) +
+  `enemies.js` (`makeSkeletonShooter`/`makeZombie` factories, dispatch). Zombie
+  is the minimal A\* consumer: `addNavigator`(GROUND)+`steerNavigator`, no FSM.
+  Skeleton Shooter is FSM WANDER (ambient roam via `world.randomFloorTile`,
+  throttled LOS-acquire)→HUNT (full GROUND A\*, `awareDecay` 8s, stationary
+  halt→windup(0.4s)→fire→cooldown(1.5s) shoot sequence gated on
+  `G.ramp.shooterStopToShoot`); arrow fire routed through a registered
+  `registerShooterFire` seam (mirrors the Spider's web seam — `enemies-ai.js`
+  still never imports `projectiles.js`, R6). **Fixed a real gap found this
+  phase:** `deathSweep` never called `removeNavigator`, leaking A\*-registered
+  navigators on death — now calls it when `e.nav` exists (see decision log).
+  Tests: `test-enemies-ground.js` (15, green). Roster still owed: Lobber, Fire
+  Wraith, the Reaper, spawners (E4), arced ordnance/`updateEbolts` (E1), and
+  the Reaper PHANTOM mover (R4).
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -110,16 +123,19 @@ re-adds `moveBody` (2-source, filtered) + `bodyHitsBlocker`; now imports
 COMPLETE: `NAV_MASK`, `isNavBlocked`, `getNavVersion`, `consumeDirtyTiles`,
 `installNav` [Phase 1] + `findPath` grid A\* [Phase 2 — 8-dir, octile, per-mask
 corner-cut, deterministic]; imports config/state/world/level-loader only, leaf
-w.r.t. gameplay). `enemies-ai.js` (nav consumer layer + direct-steer roster:
+w.r.t. gameplay). `enemies-ai.js` (nav consumer layer + full roster of steerers:
 registry + repath scheduler + round-robin budget + dirty gate + waypoint
 steering + direct-steer fallback + `updateGhost`/`updateSkeleton`/
-`updateSpider`/`updateBat` + the shared blocked-ε `isBlocked` helper +
-`registerSpiderWebFire` seam; imports config/state/world/nav only, sole
-consumer of `consumeDirtyTiles` [R1], never imported back [R6]). `enemies.js`
-(the combat spine + roster factories: 7-step `tickEnemies` +
+`updateSpider`/`updateBat`/`updateZombie`/`updateSkeletonShooter` + the shared
+blocked-ε `isBlocked` helper + `registerSpiderWebFire`/`registerShooterFire`
+seams; imports config/state/world/nav only, sole consumer of
+`consumeDirtyTiles` [R1], never imported back [R6]). `enemies.js` (the combat
+spine + roster factories: 7-step `tickEnemies` +
 player-shot/melee/death-sweep/`awardKill`/knockback/enemy-shot passes +
-`makeGhost`/`makeSkeleton`/`makeSpider`/`makeBat` factories + the Spider
-web-fire callback (imports `projectiles.js` `makeShot`); imports
+`makeGhost`/`makeSkeleton`/`makeSpider`/`makeBat`/`makeZombie`/
+`makeSkeletonShooter` factories + the Spider web-fire and Shooter arrow-fire
+callbacks (imports `projectiles.js` `makeShot`); `deathSweep` now calls
+`removeNavigator` for any `e.nav`-bearing enemy (Phase 5 fix); imports
 config/state/world/player-sinks/level-loader/projectiles/enemies-ai, never
 imported back [R6]). Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
@@ -127,11 +143,11 @@ imported back [R6]). Tests:
 `test-level-generator.js` (20), `test-level-integration.js` (16),
 `test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
 `test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66),
-`test-enemies-steer.js` (24) —
-all green (**521 checks total**). Subsystems #1, #2, and #3 complete; #4
-(Enemies) has its foundation, nav consumer layer, combat spine, and 4 of 9
-roster types (Ghost/Skeleton/Spider/Bat) built; Skeleton Shooter, Lobber,
-Zombie, Fire Wraith, the Reaper, spawners, and arced ordnance still pending.
+`test-enemies-steer.js` (24), `test-enemies-ground.js` (15) —
+all green (**536 checks total**). Subsystems #1, #2, and #3 complete; #4
+(Enemies) has its foundation, nav consumer layer, combat spine, and 6 of 9
+roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter) built; Lobber,
+Fire Wraith, the Reaper, spawners, and arced ordnance still pending.
 
 ## Implementation sequencing (agreed order)
 
@@ -746,6 +762,78 @@ spine unchanged (added to `aiByType`). Load-bearing decisions:
   retreat(1.5s)-away, and web-hit → `applyEntangle(2.5)` at 0 dmg; Bat's
   SNAPSHOT-records-then-FLY-reaches-the-recorded-point-despite-player-movement,
   a mid-flight wall pass-through, and PAUSE duration bounds.
+
+### 2026-07-05 — GROUND A* roster (Skeleton Shooter, Zombie) — Phase 5 (SPEC-ENEMIES)
+The first two roster members that actually **register with and drive** the
+Phase-2 nav consumer layer (`addNavigator(NAV_MASK.GROUND, groundMover)` +
+`steerNavigator`), added as per-type updaters in `enemies-ai.js` + factories in
+`enemies.js` (§6.1.3, §6.1.7), dispatched via `aiByType` unchanged. Load-bearing
+decisions:
+
+- **Zombie (§6.1.7) is the minimal proof-of-life for a real A\* consumer.**
+  `updateZombie` lazily registers the entity on first call, then does nothing
+  but `steerNavigator(e, player, dt)` — no FSM, no ranged attack; the melee/
+  death/gems/score it needs are already the Phase-3 spine's job. This is
+  deliberately the smallest possible body to prove the scheduler drives a live
+  entity end-to-end (repath scheduling, round-robin budget, waypoint-follow,
+  and the direct-steer fallback are all exercised by `test-enemies-ground.js`
+  with the real `enemies-ai.js`/`enemies.js`, not synthetic navigators as in
+  `test-enemies-nav.js`).
+- **Skeleton Shooter (§6.1.3) FSM WANDER→HUNT, registered as a GROUND
+  navigator in BOTH states** — WANDER's "occasionally pick a random reachable
+  waypoint" (proposed policy, per the phase prompt's own Q6 flag) is
+  implemented by handing `steerNavigator` a wander goal (`world.randomFloorTile`,
+  re-picked every `WANDER_PICK_EVERY` 3.0s, a proposed ambient-roam pace — not
+  spec-given, flagged here) instead of the player, so WANDER rides the exact
+  same repath/waypoint/direct-steer machinery as HUNT rather than a separate
+  ad hoc roam routine. Throttled LOS test (`LOS_CHECK_EVERY` 0.12s, the ADD
+  convention already reused by the Lobber/Spider dials) gates the WANDER→HUNT
+  transition; HUNT's independent throttled check both re-acquires (refreshing
+  `awareT = awareDecay`) and lets `awareT` run down to 0 → revert to WANDER,
+  clearing the wander goal so a fresh one is picked next tick.
+- **Shoot sequence is STATIONARY THROUGHOUT by construction, not by a guard.**
+  `updateSkeletonShooter` returns immediately (before any steering code) the
+  entire time `shooter.shootPhase != null` (windup → cooldown) — there is no
+  separate "don't move while shooting" branch to get wrong; the movement code
+  is simply unreachable during the sequence. `windup`(0.4s) → mint the arrow
+  (aimed at the player's position at fire time, per spec) → `cooldown`(1.5s) →
+  clear back to null. The stop-to-shoot **roll** happens once per LOS-throttle
+  tick (not every frame — "each decision tick" read as the throttle cadence,
+  matching the Lobber's already-established `losCheckEvery`-gated decision
+  pattern) using `G.ramp.shooterStopToShoot`.
+- **Arrow fire is a registered seam, not a direct `projectiles.js` import**
+  (`registerShooterFire`, same shape as the Spider's `registerSpiderWebFire`)
+  — keeps `enemies-ai.js`'s import set exactly config/state/world/nav (R6,
+  grep-verified in `test-enemies-nav.js`, still green). `enemies.js` fills it
+  with `makeShot({owner:"enemy", dmg:2, speed 256, maxTravel 192,
+  effect:"damage"})`, matching the spec's numbers exactly (`arrow.speedMul =
+  8/3.5` × `CFG.PLAYER.speed(112)` = 256; `arrow.range(6)` × `CFG.TILE(32)` =
+  192 — verified arithmetically, not just visually).
+- **FOUND AND FIXED (not new design, a real gap): `deathSweep` never called
+  `removeNavigator`.** Every enemy that dies was spliced out of `G.enemies`
+  but, if it had been `addNavigator`-registered, stayed forever in
+  `enemies-ai.js`'s `navList`/`recByEntity` — a slow leak (the round-robin
+  budget would keep servicing dead entries) that simply had no A\*-registered
+  enemy to expose it until this phase. Fixed with one line in `enemies.js`'s
+  `deathSweep`: `if (e.nav) removeNavigator(e);` before the splice. This also
+  silently pre-fixes the same hazard for the Fire Wraith/Reaper (both
+  A\*-registered) before they're built. Flagged per CLAUDE.md "phases flag
+  their own risks" — this was an unflagged cross-phase gap, not a Phase-5
+  design decision.
+- **Test seam note:** `test-enemies-ground.js` (15 checks) drives
+  `scheduleRepaths` + the per-type updater together every frame (mirroring the
+  real `tickEnemies` step-2-then-step-6 split), never just the updater alone —
+  an early draft that called only `updateZombie`/`updateSkeletonShooter` per
+  frame produced a permanent `null` path (repathing is the scheduler's job,
+  steering is the updater's), which is exactly the bug class the real spine's
+  ordering contract (E11) exists to prevent. Covers: WANDER→HUNT on LOS
+  acquire; the full windup(0.4)→fire→cooldown(1.5) sequence with a
+  stationary-throughout assertion and an exact arrow-shape check; awareDecay
+  (8s) reversion to WANDER (using a sealed-off player so HUNT's own chase
+  can't accidentally re-acquire LOS and reset the timer — an early draft's
+  open-room setup did exactly that, invalidating the test); Zombie corridor
+  advance, barricade re-route via `markNavDirty`, and `findPath→null` direct-
+  steer degrade on a fully boxed goal.
 
 ## Known open items (non-blocking for build)
 
@@ -1454,3 +1542,48 @@ applying to collision (steps 3/4 skip `spawn > 0`, per E4 "does not act or
 collide"). Owed by later phases: the eight other roster types + their factories,
 spawners (E4) with the emergence telegraph, arced ordnance (`updateEbolts`, E1),
 the Reaper PHANTOM mover (R4), and the abilities/barrels/scoring seams. No git.
+
+### 2026-07-05 — SPEC-ENEMIES Phase 5 (GROUND A* roster: Skeleton Shooter + Zombie)
+
+Added `updateSkeletonShooter`/`updateZombie` to `enemies-ai.js` +
+`makeSkeletonShooter`/`makeZombie` factories to `enemies.js` (dispatched via
+`aiByType`, registered via `registerEntityFactory`) + `test-enemies-ground.js`
+(15 checks green; full suite **536**). These are the first roster members to
+actually register with (`addNavigator`) and drive (`steerNavigator`) the
+Phase-2 nav consumer layer built in Phase 2 but only exercised there with
+synthetic navigators — this phase proves it end-to-end with real entities.
+
+Implements (SPEC-ENEMIES §6.1.3, §6.1.7): Zombie as the minimal A* consumer
+(register once, steer every frame, no FSM — melee/death/gems/score already
+handled by the Phase-3 spine); Skeleton Shooter's FSM WANDER (ambient roam via
+`world.randomFloorTile` waypoints, ridden through the SAME steerNavigator
+machinery as HUNT rather than a separate roam routine; throttled LOS-acquire)
+→HUNT (full GROUND A* toward the player, `awareDecay` 8s, stop-to-shoot roll
+on `G.ramp.shooterStopToShoot` gating a STATIONARY halt→windup(0.4s)→fire→
+cooldown(1.5s) sequence — stationary by construction, since the movement code
+is unreachable while `shootPhase != null`, not guarded separately). Arrow fire
+is a `registerShooterFire` seam (mirrors the Spider's web seam), keeping
+`enemies-ai.js`'s import set at exactly config/state/world/nav (R6, still
+grep-verified green in `test-enemies-nav.js`).
+
+**Real bug found and fixed, not new design:** `enemies.js`'s `deathSweep`
+never called `removeNavigator` — any A*-registered enemy that died would leak
+in `enemies-ai.js`'s registry forever (no enemy had actually registered before
+this phase, so nothing exposed it). Fixed with `if (e.nav) removeNavigator(e);`
+before the splice; pre-fixes the same hazard for the still-unbuilt Fire Wraith
+and Reaper. Full decision-log writeup above (Decision log section) covers the
+WANDER/HUNT wander-goal design, the stationary-sequence construction, and the
+config-number verification (arrow speed 256 = 8/3.5 × 112, maxTravel 192 =
+6 × 32 — both checked arithmetically against SPEC-ENEMIES §2's numbers).
+
+**No design gaps requiring a stop-and-surface.** All the config fields needed
+(`CFG.ENEMY.skeletonShooter.{los,arrow,windup,cooldown,awareDecay}`,
+`CFG.ENEMY.zombie.{hp,speedMul,melee}`, `G.ramp.shooterStopToShoot`) already
+existed from earlier phases (Phase 1/3 of this spec) — this phase only wired
+behavior, no new tuning dials invented. Two implementation choices are flagged
+in the decision log as proposed-not-spec-given (both low-stakes, tuning-only):
+the WANDER re-pick cadence (`WANDER_PICK_EVERY` 3.0s) and reading "each
+decision tick" as the LOS-throttle cadence rather than every frame (consistent
+with the Lobber's already-established `losCheckEvery` pattern). Owed by later
+phases: Lobber, Fire Wraith, the Reaper (PHANTOM, R4), spawners (E4), arced
+ordnance (`updateEbolts`, E1). No git.
