@@ -36,7 +36,25 @@ import {
   applyDamageToPlayer, applyKnockbackToPlayer, applyEntangle, isCarryingCrate,
 } from "./player.js";
 import { emit, registerEntityFactory } from "./level-loader.js";
-import { scheduleRepaths, groundMover, updateGhost } from "./enemies-ai.js";
+import { makeShot } from "./projectiles.js";
+import {
+  scheduleRepaths, groundMover, updateGhost, updateSkeleton, updateSpider,
+  updateBat, registerSpiderWebFire,
+} from "./enemies-ai.js";
+
+// Spider web-fire seam (§6.1.6) — enemies-ai.js's updateSpider calls this to
+// mint the entangle shot; kept here (not in enemies-ai.js) so that layer never
+// needs to import projectiles/G.shots (R6 — it stays the nav/steer layer).
+registerSpiderWebFire((e, ux, uy) => {
+  const cfg = CFG.ENEMY.spider.web;
+  G.shots.push(makeShot({
+    x: e.x, y: e.y,
+    vx: ux * cfg.speedMul * CFG.PLAYER.speed,
+    vy: uy * cfg.speedMul * CFG.PLAYER.speed,
+    r: 6, dmg: cfg.dmg, owner: "enemy",
+    maxTravel: cfg.range * CFG.TILE, effect: "entangle",
+  }));
+});
 
 /* ---- Per-type AI dispatch (step 6) -------------------------------------- *
    Keyed by entity type. Later phases add their updater here; this phase ships
@@ -44,6 +62,9 @@ import { scheduleRepaths, groundMover, updateGhost } from "./enemies-ai.js";
    move/steer + attack. Unknown types no-op. */
 const aiByType = new Map([
   ["ghost", updateGhost],
+  ["skeleton", updateSkeleton],
+  ["spider", updateSpider],
+  ["bat", updateBat],
 ]);
 
 // Test seam (structural R2 frame-order proof): inject a synthetic type's AI so a
@@ -71,7 +92,10 @@ function makeEnemy(type, p) {
     type,
     x: tc.x, y: tc.y, r: cfg.r,
     hp: cfg.hp,
-    speed: cfg.speedMul * CFG.PLAYER.speed * mult,   // EFFECTIVE px/s (E10)
+    // EFFECTIVE px/s (E10). Spider has no base speedMul (Phase-3 decision,
+    // STATUS.md) — its FSM (updateSpider) computes its own burst/pause/retreat
+    // speed from CFG.ENEMY.spider.burstMul directly and never reads e.speed.
+    speed: cfg.speedMul != null ? cfg.speedMul * CFG.PLAYER.speed * mult : 0,
     face: 0,
     kvx: 0, kvy: 0,          // knockback velocity (decays; shared ADD model, §6.6)
     contact: false,          // melee pair-lockout with the player (E6)
@@ -85,6 +109,15 @@ function makeEnemy(type, p) {
 
 export function makeGhost(p) { return makeEnemy("ghost", p); }
 registerEntityFactory("ghost", makeGhost);
+
+export function makeSkeleton(p) { return makeEnemy("skeleton", p); }
+registerEntityFactory("skeleton", makeSkeleton);
+
+export function makeSpider(p) { return makeEnemy("spider", p); }
+registerEntityFactory("spider", makeSpider);
+
+export function makeBat(p) { return makeEnemy("bat", p); }
+registerEntityFactory("bat", makeBat);
 
 /* =========================================================================
    THE SPINE

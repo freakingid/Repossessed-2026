@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 3 — **`enemies.js` created: the combat spine + the 7-step `tickEnemies` frame order** (§3.5/E11) proven end-to-end with the Ghost. Player-shot→enemy pass (§6.5, Q2 baked-in), melee exchange (§6.2, E6: pair-lockout + crate bumper + bat exemption + melee null-guard), death sweep + `awardKill` seam (§6.3, E8: gems always, score attribution-gated, Q3 baked-in), shared enemy knockback (§6.6), enemy-shot→player hit-test (§6.4, R3). `updateGhost` added to `enemies-ai.js` (§6.1.1). One-way import flow (R6) + the death-sweep-before-AI invariant (R2) recorded below. `test-enemies-combat.js` (66) green; suite **497 total**. Roster beyond the Ghost + spawners + arced ordnance still pending later phases.)
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 4 — **direct-steer roster added: Skeleton, Spider, Bat** (§6.1.2/§6.1.5/§6.1.6), riding the Phase-3 spine unchanged. `updateSkeleton`/`updateSpider`/`updateBat` added to `enemies-ai.js`; `makeSkeleton`/`makeSpider`/`makeBat` factories added to `enemies.js` and registered via `registerEntityFactory`. Skeleton wall-slide corner probe (±90°, STICKY lean commit — see decision log), Spider burst/pause/retreat/web FSM (a **design decision surfaced and resolved**: Spider has no base `speedMul`, §6 below), Bat SNAPSHOT→FLY→PAUSE raw-integrate (R8). Shared blocked-ε (Q4, 10%) factored into `enemies-ai.js`. `test-enemies-steer.js` (24) green; suite **521 total**. Roster still owed: Skeleton Shooter, Lobber, Zombie, Fire Wraith, the Reaper, and spawners/arced ordnance.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
 incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
@@ -77,10 +77,21 @@ current or the next session starts blind.
   Tests: `test-enemies-nav.js` (24, green). **Phase 3 (combat spine) BUILT** —
   `enemies.js`: the 7-step `tickEnemies` order (§3.5/E11); player-shot→enemy pass
   (§6.5), melee exchange (§6.2/E6), death sweep + `awardKill` (§6.3/E8), shared
-  knockback (§6.6), enemy-shot→player (§6.4), Ghost factory (§6.1.1). Roster
-  beyond the Ghost, spawners (E4), arced ordnance/`updateEbolts` (E1), the four A*
-  types' registration, and the Reaper PHANTOM mover (R4) still pending later
-  phases. Tests: `test-enemies-combat.js` (66, green).
+  knockback (§6.6), enemy-shot→player (§6.4), Ghost factory (§6.1.1). Tests:
+  `test-enemies-combat.js` (66, green). **Phase 4 (direct-steer roster) BUILT**
+  — Skeleton/Spider/Bat added to `enemies-ai.js` (updaters) + `enemies.js`
+  (factories, dispatch table). Skeleton (§6.1.2): direct steer + a sticky
+  ±90° wall-slide corner probe (see decision log — 1.0s commit, tuned up from
+  the original single-frame nudge which oscillated at concave corners). Spider
+  (§6.1.6): burst(1.5×)/pause FSM + blocked→retreat + LOS-gated web
+  (`makeShot` owner:"enemy", dmg 0, effect:"entangle"); **has no base speed**
+  (a design decision surfaced and resolved this phase — see decision log).
+  Bat (§6.1.5, R8): SNAPSHOT→FLY→PAUSE, FLY is a **raw position add, never
+  `moveBody`** (flies through walls by design). Shared blocked-ε (Q4, 10% of
+  intended step) factored out as `isBlocked` in `enemies-ai.js`, used by both
+  Skeleton and Spider. Tests: `test-enemies-steer.js` (24, green). Roster still
+  owed: Skeleton Shooter, Lobber, Zombie, Fire Wraith, the Reaper, spawners
+  (E4), arced ordnance/`updateEbolts` (E1), and the Reaper PHANTOM mover (R4).
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -99,25 +110,28 @@ re-adds `moveBody` (2-source, filtered) + `bodyHitsBlocker`; now imports
 COMPLETE: `NAV_MASK`, `isNavBlocked`, `getNavVersion`, `consumeDirtyTiles`,
 `installNav` [Phase 1] + `findPath` grid A\* [Phase 2 — 8-dir, octile, per-mask
 corner-cut, deterministic]; imports config/state/world/level-loader only, leaf
-w.r.t. gameplay). `enemies-ai.js` (**new** — SPEC-ENEMIES Phase 2, the nav
-consumer layer: registry + repath scheduler + round-robin budget + dirty gate +
-waypoint steering + direct-steer fallback + `updateGhost`; imports config/world/
-nav only, sole consumer of `consumeDirtyTiles` [R1], never imported back [R6]).
-`enemies.js` (**new** — SPEC-ENEMIES Phase 3, the combat spine: 7-step
-`tickEnemies` + player-shot/melee/death-sweep/`awardKill`/knockback/enemy-shot
-passes + the Ghost factory; imports config/state/world/player-sinks/level-loader/
-enemies-ai, never imported back [R6]). Tests:
+w.r.t. gameplay). `enemies-ai.js` (nav consumer layer + direct-steer roster:
+registry + repath scheduler + round-robin budget + dirty gate + waypoint
+steering + direct-steer fallback + `updateGhost`/`updateSkeleton`/
+`updateSpider`/`updateBat` + the shared blocked-ε `isBlocked` helper +
+`registerSpiderWebFire` seam; imports config/state/world/nav only, sole
+consumer of `consumeDirtyTiles` [R1], never imported back [R6]). `enemies.js`
+(the combat spine + roster factories: 7-step `tickEnemies` +
+player-shot/melee/death-sweep/`awardKill`/knockback/enemy-shot passes +
+`makeGhost`/`makeSkeleton`/`makeSpider`/`makeBat` factories + the Spider
+web-fire callback (imports `projectiles.js` `makeShot`); imports
+config/state/world/player-sinks/level-loader/projectiles/enemies-ai, never
+imported back [R6]). Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
 `test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
 `test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
-`test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66) —
-all green (**497 checks total**). Subsystems #1, #2, and #3 complete; #4
-(Enemies) has its foundation (config/seams) + nav consumer layer + combat spine
-+ the Ghost built; the rest of the roster, spawners, and arced ordnance pending.
-Next subsystem is #4 (Enemies + spawners), which owns the repath cadence,
-round-robin budget, waypoint steering, and direct-steer fallback over `nav.js`
-(pending Q1 sign-off — Shape 1 baselined).
+`test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66),
+`test-enemies-steer.js` (24) —
+all green (**521 checks total**). Subsystems #1, #2, and #3 complete; #4
+(Enemies) has its foundation, nav consumer layer, combat spine, and 4 of 9
+roster types (Ghost/Skeleton/Spider/Bat) built; Skeleton Shooter, Lobber,
+Zombie, Fire Wraith, the Reaper, spawners, and arced ordnance still pending.
 
 ## Implementation sequencing (agreed order)
 
@@ -661,6 +675,77 @@ score → knockback → crate pushback). Load-bearing decisions:
   `__enemyShotPlayerPass`) so headless tests exercise one step without a full tick's
   side effects; `__setEnemyAI(type, fn)` injects a synthetic type's AI for the R2
   structural proof. All clearly test-only.
+
+### 2026-07-05 — Direct-steer roster (Skeleton/Spider/Bat) — Phase 4 (SPEC-ENEMIES)
+Three non-A* roster members added as per-type updaters in `enemies-ai.js` +
+factories in `enemies.js` (§6.1.2, §6.1.5, §6.1.6, R8), riding the Phase-3
+spine unchanged (added to `aiByType`). Load-bearing decisions:
+
+- **Shared blocked-ε factored out (Q4).** `isBlocked(movedDist, intendedDist)`
+  in `enemies-ai.js` is the one shared "≈ zero net progress despite intent"
+  test used by both Skeleton (wall-slide) and Spider (retreat-trigger):
+  `moved < intended × 0.10` (the prompt's proposed 10%, adopted as the tuned
+  value — no counter-evidence surfaced during testing).
+- **Skeleton (§6.1.2) — the ±90° probe needed a STICKY commit, not a
+  single-frame nudge (found empirically, not spec-flagged).** A naive
+  "probe once, nudge once" implementation stalls in a stable micro-oscillation
+  at a convex corner: the direct-steer term pulls the enemy back toward the
+  blocked position every frame it's not yet fully clear, exactly cancelling
+  the prior frame's perpendicular nudge. Fixed by making the chosen lean side
+  **sticky for 1.0 s** (`LEAN_STICKY_S`, `e.skeleton.{leanX,leanY,leanT}`,
+  blended 45° with the direct vector, re-armed to the full duration on every
+  fresh `isBlocked` hit) so the corner-round commits long enough to actually
+  clear the corner before direct-steer regains full authority. Verified with a
+  synthetic convex-corner map (`test-enemies-steer.js`) — 0.25s/0.35s sticky
+  windows both still stalled; 1.0s clears it. This duration is Q4-adjacent
+  tuning (not spec-given), flagged here for a play-feel sign-off glance.
+  Deep concave pockets (both probe sides blocked) still wedge by design — the
+  lean clears to zero and the direct term alone can't escape either.
+- **Spider (§6.1.6) — SURFACED AND RESOLVED DESIGN GAP: no base speed.**
+  Phase 3 (`config.js`/`test-enemies-config.js`) already established that
+  `CFG.ENEMY.spider` has **no `speedMul`** field, on the reading that its
+  speed is "fully described by the burst/pause FSM" — but neither the GDD nor
+  SPEC-ENEMIES ever states what the FSM's `burstMul: 1.5` multiplies (GDD
+  §6.1's speed-table column for Spider literally reads "1.5 burst / pause",
+  the multiplier with no base named). This blocks any concrete `updateSpider`
+  movement number, so per CLAUDE.md ("stop and surface, don't invent") this
+  was raised to the user rather than guessed. **Resolved:** BURST moves at
+  `burstMul(1.5) × CFG.PLAYER.speed` (168 px/s); **PAUSE is stationary** (0
+  px/s — a full halt, not a slow crawl). RETREAT (triggered by a blocked BURST
+  tick only — PAUSE never moves, so PAUSE can never trigger a retreat) uses
+  the same `burstMul × CFG.PLAYER.speed` value, moving away from the player.
+  `CFG.ENEMY.spider` still has no `speedMul` — `updateSpider` computes this
+  number itself from `burstMul` and never reads `e.speed`; `enemies.js`'s
+  shared `makeEnemy` factory now guards `cfg.speedMul != null` (was an
+  unguarded multiply that would have produced `NaN` for the Spider's `e.speed`
+  — dead data since nothing reads it, but corrected for sanity/future-proofing).
+- **Bat (§6.1.5, R8) — raw integrate, never `moveBody`.** FLY is a straight
+  position add toward the SNAPSHOT point at `speedMul(1.15) × CFG.PLAYER.speed`
+  (effective, baked once at spawn like every other mover, E10) — deliberately
+  never routed through `moveBody`/`groundBlockerFilter`, so it passes through
+  walls/crates/barrels/spawners/enemies by design. Landing snaps exactly onto
+  the recorded point (overshoot-guarded: if the frame's step would pass the
+  target, jump to it exactly) rather than a fixed frame-count so it works at
+  any `dt`/distance. PAUSE duration is drawn fresh from
+  `[G.ramp.batPauseMin, batPauseMax]` each cycle (`Math.random`, not
+  deterministic — matches the "hover" flavor; no test depends on a fixed seed).
+- **Spider web-fire routed through a registered callback, not a direct
+  import.** `enemies-ai.js` stays config/state/world/nav-only (never imports
+  `projectiles.js` or reaches `G.shots` itself) — `updateSpider` calls a
+  `spiderWebFire(e, ux, uy)` seam (`registerSpiderWebFire`, default no-op)
+  that `enemies.js` fills at module-load time with the real `makeShot`/
+  `G.shots.push`. This keeps the nav/steer layer's import set exactly as
+  documented in its own file-header R6 comment; `enemies.js` already imports
+  `player.js` sinks and now additionally imports `projectiles.js`'s `makeShot`
+  (a new but R6-sanctioned edge — `enemies.js`'s own header already lists
+  `projectiles.js` `makeShot` as an allowed import).
+- **Test seam note:** `test-enemies-steer.js` (24 checks) exercises the real
+  `enemies-ai.js`/`enemies.js` modules end-to-end (factories → updaters), no
+  inlined copies. Covers: Skeleton rounding a convex corner + wedging in a
+  deep concave pocket; Spider's burst(0.5s)/pause(0.6s) cadence, blocked→
+  retreat(1.5s)-away, and web-hit → `applyEntangle(2.5)` at 0 dmg; Bat's
+  SNAPSHOT-records-then-FLY-reaches-the-recorded-point-despite-player-movement,
+  a mid-flight wall pass-through, and PAUSE duration bounds.
 
 ## Known open items (non-blocking for build)
 

@@ -27,7 +27,8 @@
    enemies-ai → {nav, world, ...}, never back.
    ========================================================================= */
 import { CFG } from "./config.js";
-import { moveBody } from "./world.js";
+import { G } from "./state.js";
+import { moveBody, bodyHitsWall, bodyHitsBlocker, hasLineOfSight } from "./world.js";
 import { findPath, consumeDirtyTiles, getNavVersion } from "./nav.js";
 
 /* ---- Navigator registry ------------------------------------------------- *
@@ -255,4 +256,198 @@ export function updateGhost(e, player, dt) {
   e.face = Math.atan2(dy, dx);
   const step = (e.speed || 0) * dt;
   moveBody(e, (dx / d) * step, (dy / d) * step, groundBlockerFilter);
+}
+
+/* ---- Shared "blocked" ε (Q4, proposed 10%) ------------------------------ *
+   Skeleton's wall-slide probe and Spider's retreat trigger both need an
+   "≈ zero net progress despite intent" test — moveBody reverted an axis so the
+   actual displacement fell well short of the intended step. One tuned
+   threshold, shared, per Q4 (SPEC-ENEMIES §10): moved < 10% of intended. */
+const BLOCKED_EPSILON = 0.10;
+function isBlocked(movedDist, intendedDist) {
+  return intendedDist > 1e-6 && movedDist < intendedDist * BLOCKED_EPSILON;
+}
+
+// How long a chosen lean side sticks before decaying back to pure direct-steer
+// (Q4-adjacent tuning). Without a commit, the direct-steer term re-fights the
+// lean every frame once the enemy is no longer touching the exact probed
+// corner cell, stalling it in a micro-oscillation instead of rounding the
+// corner (observed empirically). Re-armed to the full duration on every fresh
+// isBlocked hit (not just when it first expires), so a corner that keeps
+// re-blocking the lean-blended steer keeps extending the commit instead of
+// letting it lapse mid-round.
+const LEAN_STICKY_S = 1.0;
+
+/* ---- Skeleton: direct steer + wall-slide corner probe (§6.1.2) ---------- *
+   Same direct vector as the Ghost, but on ≈ zero net progress (Q4 ε) it
+   probes both +-90 deg one step (bodyHitsWall/bodyHitsBlocker) and rotates the
+   steer toward the freer perpendicular so it rounds convex corners. A deep
+   concave pocket still defeats it by design (both perpendiculars blocked too).
+   The chosen lean side is STICKY for LEAN_STICKY_S so the corner-round commits
+   instead of being re-fought by the direct term every single frame. Omniscient,
+   GROUND-filtered, no A-star/findPath. */
+export function updateSkeleton(e, player, dt) {
+  const dx = player.x - e.x, dy = player.y - e.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-6) return;
+  e.face = Math.atan2(dy, dx);
+  const step = (e.speed || 0) * dt;
+  const ux = dx / d, uy = dy / d;
+  const sk = e.skeleton || (e.skeleton = { leanX: 0, leanY: 0, leanT: 0 });
+  sk.leanT -= dt;
+
+  let steerX = ux, steerY = uy;
+  if (sk.leanT > 0) {
+    const bx = ux + sk.leanX, by = uy + sk.leanY;
+    const bd = Math.hypot(bx, by);
+    if (bd > 1e-6) { steerX = bx / bd; steerY = by / bd; }
+  }
+
+  const x0 = e.x, y0 = e.y;
+  moveBody(e, steerX * step, steerY * step, groundBlockerFilter);
+  const moved = Math.hypot(e.x - x0, e.y - y0);
+
+  if (isBlocked(moved, step)) {
+    // Probe +90/-90 (perpendicular to the ORIGINAL intended steer, not the
+    // current lean) one step each way; the open side becomes the new sticky
+    // lean. Both sides blocked -> deep concave pocket, lean clears, stays wedged.
+    const px = -uy, py = ux;             // +90
+    const qx = uy, qy = -ux;             // -90
+    const pBlocked = bodyHitsWall(e.x + px * step, e.y + py * step, e.r) ||
+                      bodyHitsBlocker(e.x + px * step, e.y + py * step, e.r, groundBlockerFilter);
+    const qBlocked = bodyHitsWall(e.x + qx * step, e.y + qy * step, e.r) ||
+                      bodyHitsBlocker(e.x + qx * step, e.y + qy * step, e.r, groundBlockerFilter);
+    if (!pBlocked) { sk.leanX = px; sk.leanY = py; sk.leanT = LEAN_STICKY_S; }
+    else if (!qBlocked) { sk.leanX = qx; sk.leanY = qy; sk.leanT = LEAN_STICKY_S; }
+    else { sk.leanX = 0; sk.leanY = 0; sk.leanT = 0; }
+  } else if (sk.leanT <= 0) {
+    sk.leanX = 0; sk.leanY = 0;
+  }
+}
+
+/* ---- Spider: burst/pause + retreat + web (§6.1.6) ----------------------- *
+   Omniscient, no wall navigation (Ghost-grade — never wall-hugs). The Spider
+   has NO base speedMul (SPEC-ENEMIES §5, Phase-3 decision, STATUS.md) — its
+   speed is entirely the FSM's own numbers: BURST moves at
+   burstMul(1.5)×CFG.PLAYER.speed; PAUSE is stationary (0 px/s) — resolved
+   per a design-decision sign-off (Q4-adjacent gap: the GDD/spec state the
+   burst MULTIPLIER but never a base to apply it to). RETREAT (triggered by a
+   blocked burst) moves at the same burstMul speed, away from the player.
+   Web fires on LOS + range, cooldown from G.ramp. */
+function initSpiderState(e) {
+  const s = e.spider || (e.spider = {});
+  if (s.burstState === undefined) {
+    s.burstState = "burst";   // "burst" | "pause"
+    s.burstT = CFG.ENEMY.spider.burstDur;
+    s.retreating = false;
+    s.retreatT = 0;
+    s.webCd = 0;
+  }
+  return s;
+}
+
+export function updateSpider(e, player, dt) {
+  const cfg = CFG.ENEMY.spider;
+  const s = initSpiderState(e);
+  const moveSpeed = cfg.burstMul * CFG.PLAYER.speed;   // the FSM's only speed number
+
+  // Burst/pause cadence — always ticking, independent of retreat.
+  s.burstT -= dt;
+  if (s.burstT <= 0) {
+    if (s.burstState === "burst") { s.burstState = "pause"; s.burstT = cfg.pauseDur; }
+    else { s.burstState = "burst"; s.burstT = cfg.burstDur; }
+  }
+
+  if (s.retreating) {
+    s.retreatT -= dt;
+    const dx = e.x - player.x, dy = e.y - player.y;   // away from player
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      e.face = Math.atan2(player.y - e.y, player.x - e.x);   // still faces the player
+      const step = moveSpeed * dt;
+      moveBody(e, (dx / d) * step, (dy / d) * step, groundBlockerFilter);
+    }
+    if (s.retreatT <= 0) s.retreating = false;
+  } else if (s.burstState === "burst") {
+    // PAUSE is stationary — only a BURST tick can move (and so only a BURST
+    // tick can be "blocked" and trigger a retreat).
+    const dx = player.x - e.x, dy = player.y - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      e.face = Math.atan2(dy, dx);
+      const ux = dx / d, uy = dy / d;
+      const step = moveSpeed * dt;
+      const x0 = e.x, y0 = e.y;
+      moveBody(e, ux * step, uy * step, groundBlockerFilter);
+      const moved = Math.hypot(e.x - x0, e.y - y0);
+      if (isBlocked(moved, step)) {
+        s.retreating = true;
+        s.retreatT = cfg.retreatDur;
+      }
+    }
+  }
+
+  // Web attack — independent of burst/retreat state (fires whenever LOS+range+cd allow).
+  s.webCd -= dt;
+  if (s.webCd <= 0) {
+    const dx = player.x - e.x, dy = player.y - e.y;
+    const dist = Math.hypot(dx, dy);
+    const range = cfg.web.range * CFG.TILE;
+    if (dist <= range && dist > 1e-6 && hasLineOfSight(e.x, e.y, player.x, player.y)) {
+      spiderWebFire(e, dx / dist, dy / dist);
+      s.webCd = (G.ramp && G.ramp.spiderWebCooldown) || 4.0;
+    }
+  }
+}
+
+// Web-fire seam (§6.1.6) — enemies.js registers the real shot-spawning fn
+// (needs makeShot + G.shots; enemies-ai.js stays the nav/steer layer, R6).
+// Default no-op until wired at boot.
+let spiderWebFire = () => {};
+export function registerSpiderWebFire(fn) { spiderWebFire = fn; }
+
+/* ---- Bat: SNAPSHOT -> FLY -> PAUSE, raw integrate (§6.1.5, R8) ---------- *
+   R8: FLY integrates straight toward the snapshotted point at 1.15x with NO
+   COLLISION — a raw position add, deliberately never routed through moveBody
+   (moveBody would clamp it at walls). It attacks WHERE THE PLAYER WAS. */
+function initBatState(e) {
+  const s = e.bat || (e.bat = {});
+  if (s.phase === undefined) {
+    s.phase = "snapshot";   // "snapshot" | "fly" | "pause"
+    s.snapX = e.x; s.snapY = e.y;
+    s.pauseT = 0;
+  }
+  return s;
+}
+
+function randBetween(lo, hi) { return lo + Math.random() * (hi - lo); }
+
+export function updateBat(e, player, dt) {
+  const s = initBatState(e);
+
+  if (s.phase === "snapshot") {
+    s.snapX = player.x; s.snapY = player.y;
+    s.phase = "fly";
+  }
+
+  if (s.phase === "fly") {
+    const dx = s.snapX - e.x, dy = s.snapY - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 1e-6) {
+      s.phase = "pause";
+      s.pauseT = randBetween(G.ramp?.batPauseMin ?? 0.4, G.ramp?.batPauseMax ?? 1.2);
+    } else {
+      e.face = Math.atan2(dy, dx);
+      const step = (e.speed || 0) * dt;   // e.speed already bakes 1.15x speedMul (E10)
+      if (step >= d) { e.x = s.snapX; e.y = s.snapY; }   // land exactly, no overshoot jitter
+      else { e.x += (dx / d) * step; e.y += (dy / d) * step; }   // R8: raw add, no moveBody
+      if (Math.hypot(s.snapX - e.x, s.snapY - e.y) < 1e-6) {
+        s.phase = "pause";
+        s.pauseT = randBetween(G.ramp?.batPauseMin ?? 0.4, G.ramp?.batPauseMax ?? 1.2);
+      }
+    }
+  } else if (s.phase === "pause") {
+    s.pauseT -= dt;
+    if (s.pauseT <= 0) s.phase = "snapshot";
+  }
 }
