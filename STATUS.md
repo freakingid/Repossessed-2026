@@ -1,10 +1,10 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PATHFINDING Phase 1 — `CFG.NAV` + `nav.js` infrastructure: mask predicates, mask-split occupancy grid, dirty/version seam. `findPath` owed to Phase 2 — §6.4 build-status box NOT flipped.)
-**State in one line:** **Subsystems #1 (Level loader + generator) and #2 (Player,
-incl. crates §7.1) are BUILT and tested headlessly.** Subsystem #3 (Pathfinding)
-is **in progress**: `nav.js` infrastructure (masks/occupancy/dirty/seam) is
-built; the A\* solver (`findPath`) is Phase 2. Foundation (config/state/world) + the **loader** + the
+**Last updated:** 2026-07-05 (SPEC-PATHFINDING Phase 2 — `findPath` grid A\* added to `nav.js`: 8-dir, octile heuristic, per-mask corner-cut prevention (R1), deterministic tie-break (D7). §6.4 build-status box FLIPPED to BUILT. Subsystem #3 done; repath scheduler/steering owed to #4.)
+**State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
+incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
+`nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
+the A\* solver (`findPath`, Phase 2). Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
 **geometry/solvability/assembly half** (`generateLevel(n, rng)` in
 `level-generator.js`) are all done; `generateLevel` always returns a loadable,
@@ -42,11 +42,19 @@ current or the next session starts blind.
 - [ ] §7 Interactive objects — **crates (§7.1) BUILT** (carry physics in `player.js`,
   crate-always ricochet in `projectiles.js`); **barrels (§7.2), shrapnel deferred**
   to SPEC-BARRELS (post-#4).
-- [ ] §6.4 Pathfinding — grid A\*, per-class masks, nav-dirtying. **Phase 1
-  (infrastructure) BUILT:** `nav.js` mask predicates (`isNavBlocked`,
-  GROUND/PHANTOM), mask-split occupancy grid derived from live `G` arrays
-  (D3), dirty/version accounting, `installNav` blocker-sink seam fill.
-  **`findPath` (grid A\*) is Phase 2 — owed, box stays unchecked until then.**
+- [x] §6.4 Pathfinding — **BUILT.** `nav.js` complete. **Phase 1
+  (infrastructure):** mask predicates (`isNavBlocked`, GROUND/PHANTOM),
+  mask-split occupancy grid derived from live `G` arrays (D3), dirty/version
+  accounting, `installNav` blocker-sink seam fill. **Phase 2 (`findPath`, grid
+  A\*):** 8-directional, orthogonal 1.0 / diagonal √2 cost, octile heuristic,
+  per-mask corner-cut prevention (R1 — the crux; predicate is the step's own
+  mask), `1e9` gScore sentinel (D6), total-order tie-break f→h→packed-key (D7);
+  returns start-exclusive/goal-inclusive `{tx,ty,x,y}` waypoints, `[]` when
+  start tile === goal tile, `null` when the goal is blocked or unreachable.
+  **Owed by #4:** repath scheduler / round-robin / waypoint steering /
+  direct-steer fallback (pending Q1 sign-off — Shape 1 baselined); `installNav()`
+  wiring into game startup (later integration phase); barrel-destruction
+  `markNavDirty` (SPEC-BARRELS).
 - [ ] §6 Enemies + spawners
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
@@ -62,18 +70,19 @@ ordering skeleton + crate carry system + **ranged fire hook**, ~23KB),
 two-source ricochet; imports config/state/world only, never player). `world.js`
 re-adds `moveBody` (2-source, filtered) + `bodyHitsBlocker`; now imports
 `state.js` (S4, no cycle). `level-loader.js` movable-entity placeholders carry
-**pixel** `x,y` (Phase-6 coord reconciliation). `nav.js` (**new** — SPEC-PATHFINDING
-Phase 1: `NAV_MASK`, `isNavBlocked`, `getNavVersion`, `consumeDirtyTiles`,
-`installNav`; imports config/state/world/level-loader only, leaf w.r.t.
-gameplay; `findPath` deferred to Phase 2). Tests: `test-config.js` (19),
+**pixel** `x,y` (Phase-6 coord reconciliation). `nav.js` (SPEC-PATHFINDING,
+COMPLETE: `NAV_MASK`, `isNavBlocked`, `getNavVersion`, `consumeDirtyTiles`,
+`installNav` [Phase 1] + `findPath` grid A\* [Phase 2 — 8-dir, octile, per-mask
+corner-cut, deterministic]; imports config/state/world/level-loader only, leaf
+w.r.t. gameplay). Tests: `test-config.js` (19),
 `test-world.js` (35), `test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
 `test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
-`test-nav.js` (24) — all green (**377 checks total**). Subsystems #1 and #2
-complete (SPEC-PLAYER Phases 1–7 all done: config data, world.js collision
-seam, loader coord-keyed plate press + emit export, input.js, player.js core,
-carry system, fire + projectiles.js). Subsystem #3 (Pathfinding) Phase 1 of
-SPEC-PATHFINDING done; Phase 2 (`findPath`, grid A\*) is next.
+`test-nav.js` (36) — all green (**389 checks total**). Subsystems #1, #2, and
+#3 complete (SPEC-PLAYER Phases 1–7 + SPEC-PATHFINDING Phases 1–2 all done).
+Next subsystem is #4 (Enemies + spawners), which owns the repath cadence,
+round-robin budget, waypoint steering, and direct-steer fallback over `nav.js`
+(pending Q1 sign-off — Shape 1 baselined).
 
 ## Implementation sequencing (agreed order)
 
@@ -137,6 +146,40 @@ passable to the Reaper) and has its own explicit OOB guard. This is an
 **interpretation of a seam authored before nav existed** (SPEC-PATHFINDING
 D3, flagged in the spec itself for a sign-off glance) — not new design, the
 spec pinned this reading.
+
+### 2026-07-05 — `findPath` grid A\*: octile heuristic, R1 corner-cut, D7 tie-break — Phase 2 (SPEC-PATHFINDING)
+`findPath(sx,sy,gx,gy,mask)` added to `nav.js`, built **entirely on
+`isNavBlocked`** — it never hardcodes `world.isWall`, so both masks stay honest
+(GROUND: wall+door+object; PHANTOM: object-only). Load-bearing decisions:
+- **R1 (the headline — corner-cut × per-mask, the STATUS-flagged Opus-tier
+  subtlety): resolved.** A diagonal step `(x,y)→(x+dx,y+dy)` is permitted only
+  when **all three** of `isNavBlocked(x+dx,y,mask)`, `isNavBlocked(x,y+dy,mask)`,
+  `isNavBlocked(x+dx,y+dy,mask)` are false, **using the step's own mask**. So
+  GROUND cannot squeeze a wall corner and PHANTOM's corner-cut is *object-aware,
+  not wall-aware* (it slips a wall diagonal but not two diagonally-placed
+  crates). Verified by two explicit corner tests (GROUND wall-squeeze between
+  `(2,2)`/`(3,3)`; PHANTOM straight diagonal crossing wall `(5,5)`).
+- **Heuristic (octile):** `h=(adx+ady)+(√2−2)·min(adx,ady)` — admissible +
+  consistent for the {1,√2} cost model, so the closed set never needs re-opening.
+- **Tie-break (D7):** open-set min by `f`, then `h` (prefer closer to goal), then
+  packed key `ty·COLS+tx` — a **total order**, so identical inputs yield a
+  deep-equal path array (determinism test asserts this). `cameFrom` is set only
+  on a **strict** gScore improvement, so parent choice is also order-independent.
+  Open set is an array-min scan (fine at ~10³ tiles, spec-sanctioned); a `closed`
+  Set prevents re-expansion.
+- **Sentinel (D6/R6):** absent `gScore` defaults to the finite literal `1e9`,
+  never `Infinity` (grep-guarded in `test-nav.js`; the word "Infinity" appears
+  nowhere in `nav.js`, comments included).
+- **Coords (D5/R5):** start/goal in **pixels** → tile via `(x/TILE)|0`; each
+  waypoint carries **both** `{tx,ty}` (identity, for #4's dirty-intersection
+  check) and `{x,y}=tileCenter` (pixels, for steering). Path is
+  **start-exclusive, goal-inclusive**; `[]` iff start tile === goal tile; `null`
+  iff goal blocked (early) or open set exhausts (unreachable). The **start** tile
+  is always expandable even when blocked (navigator standing on a dropped crate).
+- **Import:** `nav.js` now also imports `tileCenter` from `world.js` (still the
+  only allowed edges: config/state/world/level-loader; import-discipline grep
+  green). No repath scheduler / navigator registry / `navTick` / steering built —
+  Shape-1 baseline (Q1) keeps those in **#4**.
 
 ## Architecture / circular-import decisions
 
@@ -982,4 +1025,46 @@ made (occupancy consumption as invalidation-only, D3) was explicitly flagged
 under Decision log above, not invented. **§6.4 build-status box NOT flipped**
 (`findPath` is Phase 2, the R1 corner-cut × per-class-mask subtlety flagged
 for Opus/thinking-on/high-effort per the phase prompt's own escalation rule).
+No git.
+
+### 2026-07-05 — SPEC-PATHFINDING Phase 2 (`findPath` — grid A\*)
+
+Added `findPath(sx,sy,gx,gy,mask)` to `nav.js` (the file's second and final
+concern), built entirely on Phase 1's `isNavBlocked`. **Subsystem #3 is now
+complete** and the **§6.4 build-status box is FLIPPED to BUILT.** Grid A\*,
+8-directional (orthogonal 1.0 / diagonal √2), octile heuristic, corner-cut
+prevention under the step's own mask, `1e9` gScore sentinel, total-order
+tie-break (f→h→packed-key) for determinism. Returns start-exclusive /
+goal-inclusive `{tx,ty,x,y}` waypoints, `[]` when start tile === goal tile,
+`null` when the goal is blocked or unreachable; the start tile is always
+expandable even if blocked. `nav.js` now also imports `tileCenter` from
+`world.js` (still leaf w.r.t. gameplay). See the Decision log entry above for
+the full R1/D5/D6/D7 rationale.
+
+Extended `test-nav.js` (24 → 36 checks, +12) covering SPEC-PATHFINDING §10
+items **1** (open-floor straight diagonal, monotone, length == chebyshev),
+**2** (GROUND wall detour — routes around, crosses no `isWall`, longer than the
+blocked straight line), **3** (GROUND corner-cut — two walls meeting at a
+diagonal; walk the path, assert every diagonal hop's two shared orthogonals are
+GROUND-passable, and the `(2,3)↔(3,2)` wall-squeeze is absent), **4** (plate-door
+closed→`null` / press via loader seam→routes through the door tile — a real
+`markDirty` round-trip), **5** (PHANTOM ignores walls — straight diagonal that
+*crosses* a wall tile, proving PHANTOM corner-cut is object-aware not
+wall-aware), **6** (PHANTOM crate-line detour then `splice`+`markDirty`→straight
+again), **9** (sealed-pocket goal→`null` via open-set exhaustion; PHANTOM OOB
+goal→`null` (R4); start tile === goal tile→`[]`), **10** (determinism — identical
+inputs deep-equal across repeated calls). Full suite green, **389 checks total**
+(config 19 / world 35 / level-loader 40 / level-content 79 / level-generator 20 /
+level-integration 16 / input 19 / player 108 / projectiles 17 / nav 36).
+
+**No spec gaps requiring invented design.** One test assertion self-corrected
+mid-build (not a spec/design issue): the PHANTOM crate-detour was first asserted
+"longer than straight" by **tile count**, but a diagonal detour can reach the
+goal in the *same* tile count as the orthogonal straight line (diagonals cover
+both axes) — the honest "routes around" assertion is that the path **leaves the
+blocked straight row**, which it must, since the crates seal that row. Fixed and
+green. **Owed (unchanged from the spec's seam list):** the repath scheduler /
+round-robin / waypoint steering / direct-steer fallback → **#4** (pending **Q1**
+sign-off, Shape 1 baselined); `installNav()` wiring into game startup → later
+**integration** phase; barrel-destruction `markNavDirty` → **SPEC-BARRELS**.
 No git.
