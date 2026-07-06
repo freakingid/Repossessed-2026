@@ -225,4 +225,28 @@ export const CFG = {
   },
 
   GEM: { energy: 5 },  // §3.5 — each dropped gem = 5 energy (feeds #5's Nova bar)
+
+  // §5 Abilities — Nova + Lightning dials (SPEC-ABILITIES §2.3). Tiles are
+  // ×CFG.TILE(32) at read time. GEM.energy(=5) above is the per-gem credit A6 consumes.
+  ABILITY: {
+    nova: {
+      barCap: 100,          // gem-energy bar capacity (§5.1, source-fixed)
+      chargeCap: 2,         // max banked full charges (§5.1, source-fixed)
+      minBarToFire: 25,     // (proposed) min live-bar energy to fire from the bar (§5.1)
+      ringMaxHp: 50,        // charge-fire ring health; bar-fire scales this by energy/barCap (§5.1)
+      expandTilesPerSec: 12,// ring expansion (§5.1) → 384 px/s
+      strokeTiles: 0.6,     // COSMETIC only — renderer (#7); not in the hit test (A3)
+      radiusCapTiles: 14,   // (proposed) hard radius stop (§5.1) → 448 px
+      cooldown: 0.5,        // s, anti-double-tap (§5.1)
+      reaperDamage: 10,     // (proposed) dmg to a nova-resist target (§5.1)
+      reaperRingCost: 20,   // (proposed) ring-health cost of hitting a nova-resist target (§5.1)
+    },
+    lightning: {
+      radiusTiles: 5,       // (proposed) wipe radius (§5.2) → 160 px
+      reaperDamage: 5,      // (proposed) dmg to a lightning-resist target (§5.2)
+      cooldown: 10,         // s (§5.2)
+      stunSeconds: 3,       // self-stun on cast (§5.2 / §2.5 STUNNED = 3.0 s)
+      // costs no gem energy — no field, the null case is structural (§5.2)
+    },
+  },
 };

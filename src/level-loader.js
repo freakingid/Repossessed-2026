@@ -413,6 +413,7 @@ export function loadLevel(def) {
 function clearTransient(def) {
   G.shots = []; G.enemies = []; G.spawners = []; G.pickups = [];
   G.crates = []; G.barrels = []; G.shrapnel = []; G.ebolts = [];
+  G.novas = [];                                             // A9 — live Nova rings, per-level transient
   G.marks = []; G.floats = []; G.lights = [];               // lights = light-emitter registry
   G.spawnTimer = 0; G.pickupTimer = 0;
   G._levelEndEmitted = false; G._allEnemiesDeadEmitted = false;

@@ -720,3 +720,9 @@ export {
   spawnerTick as __spawnerTick,
   spawnerDeathSweep as __spawnerDeathSweep,
 };
+
+/* SPEC-ABILITIES A1 — public alias so #5 (Nova/Lightning) routes its AoE kills
+   through the ONE shared death-sweep path (dropGems→awardKill→emit→cleanup→splice)
+   instead of a bespoke splice. Alias only: deathSweep's body and callers are
+   unchanged; abilities import this name and self-run it (order-tolerant). */
+export { deathSweep as sweepDeadEnemies };

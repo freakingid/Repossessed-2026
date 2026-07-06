@@ -1,6 +1,15 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 9 — **Spawners added** (§6.3,
+**Last updated:** 2026-07-05 (SPEC-ABILITIES Phase 1 — **subsystem #5 begun,
+enabling seams only** (no `abilities.js` yet): four surgical edits — `CFG.ABILITY`
+block (§2.3, nova/lightning dials, leaf data), `enemies.js` `sweepDeadEnemies`
+ALIAS export of the private `deathSweep` (A1, body/callers untouched), `player.js`
+`applyStun(seconds)` extends-not-shortens STUNNED producer beside `applyEntangle`
+(A7, no iframe/loco gate, no new imports), and `G.novas = []` added to the loader's
+transient-clear line (A9, per-level Nova-ring transient). `test-abilities-seams.js`
+(29) green; suite **648 total** (was 619, purely additive). See the SPEC-ABILITIES
+Phase 1 decision-log entry.)
+(SPEC-ENEMIES Phase 9 — **Spawners added** (§6.3,
 E4): the roster is now COMPLETE (all 9 types + spawners). `enemies.js`'s
 `makeSpawner` factory **decorates** (does not replace) the loader's existing
 spawner placeholder — `getEntityFactory("spawner")` (new level-loader.js
@@ -249,7 +258,22 @@ current or the next session starts blind.
   `enemy:killed`+calls `markNavDirty` on the vacated tile. Barrel/shrapnel
   destruction of spawners stays out of scope (SPEC-BARRELS). Tests:
   `test-enemies-spawner.js` (28, green).
-- [ ] §5 Abilities — Nova, Lightning, gem economy
+- [ ] §5 Abilities — Nova, Lightning, gem economy. **Phase 1 (enabling edits)
+  done** — the four surgical ENABLING seams from SPEC-ABILITIES §1/§2.3 landed
+  (no `abilities.js` yet): (1) `config.js` gained the `CFG.ABILITY` block (§2.3 —
+  `nova{}` 10 dials + `lightning{}` 4 dials, data-only, leaf preserved); (2)
+  `enemies.js` exports its private `deathSweep` under the public alias
+  `sweepDeadEnemies` (A1 — one alias line, body/callers untouched) so #5's
+  Nova/Lightning AoE kills route through the ONE shared drop/score/emit/cleanup
+  sweep instead of a bespoke splice; (3) `player.js` gained
+  `applyStun(seconds)` (A7 — the missing STUNNED producer, `p.stun =
+  Math.max(p.stun, seconds)`, extends-not-shortens, no iframe/loco gate, no new
+  imports) — Lightning's self-stun sink; (4) `level-loader.js` clears `G.novas =
+  []` in the transient-clear line (A9 — Nova rings are a per-level transient;
+  `abilities.js` will also lazy-init `G.novas ||= []`). Tests:
+  `test-abilities-seams.js` (29, green). Owed by the build pass: `abilities.js`
+  itself (gem-energy economy, Nova rings + updateAbilities, Lightning cast, the
+  `registerAbility`/`registerBarrelDetonation` fills).
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
 - [ ] §9/§10/§11 Scoring, HUD, render/lighting, audio
@@ -1143,6 +1167,54 @@ the new arced-ordnance system it shares no code with the straight-shot
   player's fire-time position; `updateEbolts` mid-flight (no damage, entry
   still live) vs. post-landing (AoE damage lands THROUGH an intervening wall,
   entry removed, barrel seam called with the landing point/radius/cause).
+
+### 2026-07-05 — SPEC-ABILITIES Phase 1 (four enabling seam edits; `abilities.js` NOT built) — subsystem #5 begun
+Four surgical ENABLING edits landed across three files #5 does not own plus
+`config.js` — data/seams only, no `abilities.js`, no behavior on existing code
+paths (the suite went 619 → 648, all green; nothing pre-existing changed count).
+Load-bearing decisions, all pinned by SPEC-ABILITIES §1/§2.3 (owner-approved A1/
+A7/A9), not new design:
+- **A1 — `sweepDeadEnemies` is an ALIAS export of the existing private
+  `deathSweep`, not a rename.** Added one line — `export { deathSweep as
+  sweepDeadEnemies };` — after the test-only `__`-export block in `enemies.js`.
+  `deathSweep`'s body and its two internal callers (`explodeFireWraith`'s extra
+  sweep, `tickEnemies` step 5) are untouched; the `deathSweep as __deathSweep`
+  test alias is untouched. #5's Nova/Lightning AoEs set `e.hp`/`e._cause =
+  "player-nova"|"player-lightning"` then self-run `sweepDeadEnemies()` so the ONE
+  drop/score/emit/nav/light cleanup path handles the kill (order-tolerant — the
+  ability step doesn't rely on a later `tickEnemies` sweep, same posture as
+  `updateEbolts`). Spawners are Nova/Lightning-immune, so `spawnerDeathSweep`
+  stays #5-untouched.
+- **A7 — `applyStun(seconds)` is the missing STUNNED producer.** Added directly
+  after `applyEntangle` in `player.js`: `p.stun = Math.max(p.stun, seconds)` —
+  extends-not-shortens (parallel to `applyEntangle`), **no iframe, no loco gate,
+  no new imports** (`G` already in scope). `player.js` already MODELED stun end-
+  to-end (`p.stun` timer decrement, `tryAbilities` lock, `dropCarried("stun")`
+  force-drop) but nothing set it; Lightning is the first producer. The carried-
+  object force-drop follows for free on the next `updatePlayer` step-2 (one-frame
+  lag, inside the existing STUNNED contract). Abilities call the sink, never
+  reach `G.player.stun` directly (E7's ruling).
+- **A9 — `G.novas` is a per-level transient.** Added `G.novas = [];` to
+  `level-loader.js`'s `clearTransient` line, beside `G.shots`/…/`G.ebolts`, so a
+  live Nova ring can't survive a level transition. `abilities.js` will also
+  lazy-init `G.novas ||= []` on first push (the `G.pickups`/`G.ebolts`
+  precedent), so ability tests need no loader. `gemEnergy`/`storedCharges` are
+  run-state and persist (NOT cleared here); cooldowns reset on load.
+- **§2.3 — `CFG.ABILITY` is leaf data only.** Added the `nova{}` (10 dials) +
+  `lightning{}` (4 dials) block after `CFG.GEM` in `config.js`, verbatim from the
+  spec (tiles are ×TILE at read time; `(proposed)` dials flagged in comments).
+  `lightning` has **no** energy-cost field — the null case is structural (§5.2).
+  `config.js` stays a leaf (no imports added; `test-config.js`'s import-discipline
+  check still green). `GEM.energy(=5)` unchanged.
+- **Test:** `test-abilities-seams.js` (29 checks) — CFG.ABILITY has exactly the
+  spec'd nova/lightning keys+values (no stray keys); `applyStun` extends-not-
+  shortens (stun 2 → applyStun(1) stays 2 → applyStun(3) → 3, no iframe/loco
+  change) and throws with no player state; `sweepDeadEnemies` is a function and
+  sweeps an hp≤0 enemy while keeping a live one; the loader clears `G.novas` to
+  `[]`. Uses the house headless harness (`check`/`throws`, dynamic real-module
+  import, a defensive `window`/`document`/`AudioContext` stub — not strictly
+  needed since the graph touches `window` only inside uncalled `input.js` glue,
+  but installed to survive a graph shift).
 
 ## Known open items (non-blocking for build)
 

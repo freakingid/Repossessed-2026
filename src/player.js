@@ -231,6 +231,16 @@ export function applyEntangle(seconds) {
   p.entangleAngle = null;
 }
 
+/* SPEC-ABILITIES A7 — the missing STUNNED producer (parallel to E7's applyEntangle).
+   player.js already MODELS stun (p.stun timer, tickTimers decrement, tryAbilities
+   lock, dropCarried("stun") force-drop) but nothing set p.stun; Lightning is the
+   first. Abilities call this sink, not the field. Extends-not-shortens; no iframe,
+   no loco gate. The carried-object force-drop follows for free next frame. */
+export function applyStun(seconds) {
+  const p = G.player;
+  p.stun = Math.max(p.stun, seconds);
+}
+
 /* ---- Carry-aware blocker filter (§4.2) -----------------------------------
    Policy the caller supplies to world.bodyHitsBlocker (which owns geometry).
    - Never block on the crate we are carrying (spliced from G.crates anyway).
