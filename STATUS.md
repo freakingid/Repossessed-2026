@@ -1,6 +1,37 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-06 (SPEC-PICKUPS Phase 1 — **enabling edits only**
+**Last updated:** 2026-07-06 (SPEC-PICKUPS Phase 2 — **new leaf module
+`src/pickups.js` created: the three factory-decoration wraps only, no
+`updatePickups` yet.** Mirrors the shipped `makeSpawner` (enemies.js) /
+`makeBarrel` (barrels.js) wrap-and-override precedent: captures each base
+factory via `getEntityFactory`, re-registers a named wrapper that calls the
+base then attaches the one sink field the type's collect branch will read
+(D2) — `food` → `e.heal = CFG.FOOD[e.kind]`; `treasure` → `e.points =
+CFG.TREASURE[e.kind]`; `powerup` → `e.power = e.kind`. **`key` is
+intentionally left unwrapped** — a key needs no value field (contact ⇒
+`G.keys++` is a Phase-3 concern), so it stays the loader's inert placeholder
+per spec §3. No sink imports yet (`healPlayer`/`addGemEnergy` etc. are
+Phase-3 imports) — this phase touches only `config.js` reads +
+`level-loader.js` factory registration, nothing else. **R7 (mis-kinded
+placement data) handled as spec'd:** an unrecognized `kind` decorates to
+`undefined` (e.g. `CFG.FOOD["bogus"]`) rather than throwing; no substitution,
+no `console.warn` added (optional per spec, skipped as unnecessary noise).
+New `test-pickups.js` (14 asserts, green): each of the three wraps decorates
+correctly across their kind tables (food candy/feast, treasure candyCorn/
+silverSkull/goldChest, powerup fast/magnet), override-wins-over-placeholder,
+key stays valueless, and the R7 mis-kinded case (`food{kind:"bogus"}` →
+`heal===undefined`, no throw). Full suite reran green (all `test-*.js`
+pass). **R1 (factory-override load order) is OWED, not resolved here** —
+these overrides are correct only if the boot module imports
+`level-loader.js` **before** `pickups.js` (last-wins `registerEntityFactory`,
+verified `Map.set`); no boot/main-loop file was touched this phase (by
+design — integration is a later, separate phase). This is the same
+deferred-boot-wiring debt already carried for `abilities.js` and
+`barrels.js`. Owed next: SPEC-PICKUPS Phase 3 — `updatePickups(dt)` (the
+Magnet-pull → gem-age/despawn → contact collection ordered pass, R2/R3),
+the `pickup:collected` emit, and the sink imports (`healPlayer`,
+`addGemEnergy`) — still no boot `import "./pickups.js"` wiring.)
+(SPEC-PICKUPS Phase 1 — **enabling edits only**
 (`pickups.js` NOT built yet): three new additive `CFG` blocks added to
 `config.js` verbatim per §2.3–2.5 (`CFG.PICKUP` — `grab`(0.5t)/`gemDespawn`(12s)/
 `powerupShots`(75, D5)/`magnet{radius(6t), pullSpeed(10 t/s), duration(10s)}`;
