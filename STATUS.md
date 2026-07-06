@@ -1,6 +1,25 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-06 (SPEC-BARRELS Phase 4 — **detonation, the shrapnel
+**Last updated:** 2026-07-06 (SPEC-PICKUPS Phase 1 — **enabling edits only**
+(`pickups.js` NOT built yet): three new additive `CFG` blocks added to
+`config.js` verbatim per §2.3–2.5 (`CFG.PICKUP` — `grab`(0.5t)/`gemDespawn`(12s)/
+`powerupShots`(75, D5)/`magnet{radius(6t), pullSpeed(10 t/s), duration(10s)}`;
+`CFG.FOOD{candy:5, feast:10}`; `CFG.TREASURE{candyCorn:100, silverSkull:250,
+goldChest:500}`; `CFG.GEM.energy`(5) reused unchanged, not re-declared); and one
+line in `level-loader.js` `clearTransient` — `G.magnet = 0;` added immediately
+beside `G.novas = []` (OQ-P1, the Magnet timer is a per-level transient, resets
+on load exactly like Nova rings; `G.pickupTimer`, a pre-existing unrelated
+spawn-cadence field, is untouched per R4/D10). No `pickups.js` yet, no
+collection logic, no factory decoration — purely data + one reset line.
+`test-config.js` extended with 12 new asserts locking the dials (`powerupShots
+===75`, `magnet.duration===10`, `FOOD.feast===10`, `TREASURE.goldChest===500`,
+`GEM.energy===5` unchanged, etc.); green. Full suite reran green, **981 total**
+(was 969, purely additive). Owed next: SPEC-PICKUPS Phase 2+ — `pickups.js`
+itself (the wrap-and-override decoration factories for food/treasure/powerup,
+`updatePickups(dt)`'s Magnet-pull→gem-age→contact ordered pass, the
+`pickup:collected` emit) — still no boot `import "./pickups.js"` wiring, same
+integration debt already owed for `abilities.js`/`barrels.js`.)
+(SPEC-BARRELS Phase 4 — **detonation, the shrapnel
 species, chain reactions + attribution built; the barrels subsystem (#6) is now
 COMPLETE** (B7/B8/B9, §5). **`barrels.js`:** `damageBarrel` hp≤0 no longer a TODO
 — it now only *marks* (subtract hp + tag `_cause`; `fireStateOf === "explode"` is
@@ -659,7 +678,13 @@ current or the next session starts blind.
   the boot `import "./abilities.js"` so `registerAbility`/`registerBarrelDetonation`
   run before frame 1; and wiring `initAbilities()`/`updateAbilities(dt)` into the
   main loop (integration phase).
-- [ ] §3 Power-ups & pickups
+- [ ] §3 Power-ups & pickups — **Phase 1 (enabling edits) done** — `CFG.PICKUP`
+  (grab/gemDespawn/powerupShots/magnet dials)/`CFG.FOOD`/`CFG.TREASURE` added to
+  `config.js` (additive; `CFG.GEM.energy` reused unchanged); `level-loader.js`
+  `clearTransient` gained `G.magnet = 0;` beside `G.novas` (OQ-P1, transient
+  reset; `G.pickupTimer` untouched, D10). `test-config.js` +12 asserts, green.
+  No `pickups.js` yet (Phase 2+): decoration factories, `updatePickups(dt)`,
+  `pickup:collected` emit all still owed, per SPEC-PICKUPS.
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
 - [ ] §9/§10/§11 Scoring, HUD, render/lighting, audio
 

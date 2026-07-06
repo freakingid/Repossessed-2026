@@ -276,4 +276,19 @@ export const CFG = {
     light: { smolder: 2.0, burning: 3.0, raging: 4.5, flash: 8.0 },  // tiles; #7 reads (§8.4)
     LETHAL: 1e9,              // seam "detonate outright" damage (B10; finite, not Infinity)
   },
+
+  // §3 Pickups (SPEC-PICKUPS §2.3–2.5). Spatial dials in TILES, ×CFG.TILE(32) at read.
+  // CFG.GEM.energy(=5) above is reused unchanged as the per-gem credit.
+  PICKUP: {
+    grab:         0.5,   // tiles — contact grace: contact when hypot(player,pickup) < p.r + grab·TILE
+    gemDespawn:   12,    // s — uncollected gems vanish (§3.5)
+    powerupShots: 75,    // shots granted per weapon power-up (D5; ADD POWERUP_SHOTS, verified)
+    magnet: {
+      radius:    6,      // tiles — pull range (§3.2)
+      pullSpeed: 10,     // tiles/s — pull speed (§3.2)
+      duration:  10,     // s — grant/refresh amount, ADDITIVE (§3.2, D8)
+    },
+  },
+  FOOD:     { candy: 5, feast: 10 },                              // HP; healPlayer clamps to overhealCap(30)
+  TREASURE: { candyCorn: 100, silverSkull: 250, goldChest: 500 }, // points (§3.4)
 };

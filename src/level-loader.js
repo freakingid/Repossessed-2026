@@ -414,6 +414,7 @@ function clearTransient(def) {
   G.shots = []; G.enemies = []; G.spawners = []; G.pickups = [];
   G.crates = []; G.barrels = []; G.shrapnel = []; G.ebolts = [];
   G.novas = [];                                             // A9 — live Nova rings, per-level transient
+  G.magnet = 0;   // SPEC-PICKUPS §11 (OQ-P1) — Magnet timer is transient, resets each level
   G.marks = []; G.floats = []; G.lights = [];               // lights = light-emitter registry
   G.spawnTimer = 0; G.pickupTimer = 0;
   G._levelEndEmitted = false; G._allEnemiesDeadEmitted = false;

@@ -135,5 +135,19 @@ check("CFG.PLAYER.vaultHop = 2.0 t x TILE(32) = 64", CFG.PLAYER.vaultHop === 2.0
 check("CFG.NAV.repathMinInterval === 0.5", CFG.NAV.repathMinInterval === 0.5);
 check("CFG.NAV.diagonalCost present and equals Math.SQRT2", CFG.NAV.diagonalCost === Math.SQRT2);
 
+// --- CFG.PICKUP / CFG.FOOD / CFG.TREASURE (SPEC-PICKUPS §2.3–2.5) -------
+check("CFG.PICKUP.powerupShots === 75", CFG.PICKUP.powerupShots === 75);
+check("CFG.PICKUP.grab === 0.5", CFG.PICKUP.grab === 0.5);
+check("CFG.PICKUP.gemDespawn === 12", CFG.PICKUP.gemDespawn === 12);
+check("CFG.PICKUP.magnet.radius === 6", CFG.PICKUP.magnet.radius === 6);
+check("CFG.PICKUP.magnet.pullSpeed === 10", CFG.PICKUP.magnet.pullSpeed === 10);
+check("CFG.PICKUP.magnet.duration === 10", CFG.PICKUP.magnet.duration === 10);
+check("CFG.FOOD.candy === 5", CFG.FOOD.candy === 5);
+check("CFG.FOOD.feast === 10", CFG.FOOD.feast === 10);
+check("CFG.TREASURE.candyCorn === 100", CFG.TREASURE.candyCorn === 100);
+check("CFG.TREASURE.silverSkull === 250", CFG.TREASURE.silverSkull === 250);
+check("CFG.TREASURE.goldChest === 500", CFG.TREASURE.goldChest === 500);
+check("CFG.GEM.energy === 5 (unchanged, reused)", CFG.GEM.energy === 5);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
