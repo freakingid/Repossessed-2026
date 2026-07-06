@@ -100,12 +100,70 @@ export function updateAbilities(dt) {
 }
 
 /* ---- Ability handlers (registered at module load, §7) --------------------
-   onNova (Phase 4) and onLightning (Phase 3) are NO-OP STUBS this phase. The
-   registration below is by REFERENCE, so filling these bodies later needs no
+   onNova (Phase 4) is a NO-OP STUB this phase. onLightning (Phase 3, below) is
+   FILLED. The registration is by REFERENCE, so filling a body needs no
    re-registration. player.js edge-triggers them on the rising input edge and
    only when not STUNNED (its tryAbilities gate). */
 function onNova() {}
-function onLightning() {}
+
+/* ---- Lightning cast (§5.1, A2/A7/A8/A1) — INSTANTANEOUS -------------------
+   Resolved entirely here; there is no persistent Lightning entity to tick.
+   Called on the rising input edge, not while STUNNED (player.js tryAbilities
+   gate). Consumes NO gem energy (§5.2 — the null case is structural).
+
+   Order (SPEC §5.1):
+   1. cooldown gate;
+   2. R = radius (px), (px,py) = player centre;
+   3. enemy radius wipe — resist.lightning MARKER (A2, NOT boss/type): a resisted
+      target takes reaperDamage and SURVIVES (no _cause, not counted); everything
+      else is destroyed (hp=0, _cause="player-lightning") and counted;
+   4. sweepDeadEnemies() ONCE after the whole pass (A1 — never per-hit, which
+      would splice mid-iteration; the shared drop/score/emit/cleanup path);
+   5. detonateBarrelsInRadius (A8 seam — no-op until SPEC-BARRELS);
+   6. applyStun (A7 — the vulnerability window; force-drops any carried object
+      next frame via the existing dropCarried("stun"));
+   7. arm the cooldown;
+   8. emit a SNAPSHOT ability:cast with killCount = destroys only (OQ-A1; a
+      resisted Reaper chipped for 5 is NOT a kill). Subscribers must not reach
+      back into G — the one-way-flow rule. */
+function onLightning() {
+  if (lightningCd > 0) return;                       // 1. cooldown gate
+
+  const cfg = CFG.ABILITY.lightning;
+  const R = cfg.radiusTiles * CFG.TILE;              // 2. wipe radius (px)
+  const px = G.player.x, py = G.player.y;            //    player centre (frozen at cast)
+
+  // 3. Enemy radius wipe. Spawners/crates are never referenced, so their
+  //    immunity (§5.2) holds by construction, not a special-cased skip.
+  let killCount = 0;
+  const enemies = G.enemies || [];
+  for (const e of enemies) {
+    const dx = e.x - px, dy = e.y - py;
+    const rr = R + e.r;                              // per-enemy reach (edge, not centre)
+    if (dx * dx + dy * dy > rr * rr) continue;
+    if (e.resist?.lightning) {
+      e.hp -= cfg.reaperDamage;                      // resisted → chip 5, survives (A2)
+    } else {
+      e.hp = 0;
+      e._cause = "player-lightning";                 // player-attributed (§6)
+      killCount++;                                   // destroys only (OQ-A1)
+    }
+  }
+
+  sweepDeadEnemies();                                // 4. ONE shared sweep after the pass (A1)
+  detonateBarrelsInRadius(px, py, R, "player-lightning"); // 5. barrel seam (A8, inert until SPEC-BARRELS)
+  applyStun(cfg.stunSeconds);                        // 6. self-stun 3s (A7)
+  lightningCd = cfg.cooldown;                        // 7. arm cooldown (10s)
+  emit("ability:cast", { kind: "lightning", killCount }); // 8. snapshot payload (OQ-A1)
+}
 
 registerAbility("nova", onNova);
 registerAbility("lightning", onLightning);
+
+/* ---- Test affordances (house __-prefixed convention) ---------------------
+   The handlers are registered into player.js by reference (above) and are
+   otherwise module-local. Export them under __-prefixed aliases so headless
+   tests can drive a cast directly (SPEC §9 — set G state, register a barrel
+   spy, call the handler), the same posture as enemies.js's __deathSweep /
+   __playerShotEnemyPass. player.js still invokes them only via the registry. */
+export { onLightning as __onLightning };

@@ -1,6 +1,39 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ABILITIES Phase 2 — **`abilities.js`
+**Last updated:** 2026-07-06 (SPEC-ABILITIES Phase 3 — **Lightning cast built**
+(`abilities.js` `onLightning` body filled; **Nova stays a NO-OP stub**, owed P4).
+Instantaneous per §5.1: (1) cooldown gate (`return` if `lightningCd>0`); (2)
+`R = lightning.radiusTiles × CFG.TILE` (=160), `(px,py) = G.player` centre frozen
+at cast; (3) **radius wipe** over `G.enemies` — squared-distance edge test
+`(e.x-px)²+(e.y-py)² ≤ (R+e.r)²` (per-enemy reach, house AoE idiom): branch on the
+**`e.resist?.lightning` MARKER** (A2, NOT boss/type) → resisted takes
+`reaperDamage`(5) and SURVIVES (no `_cause`, not counted); else `e.hp=0`,
+`e._cause="player-lightning"`, `killCount++`; (4) `sweepDeadEnemies()` **ONCE**
+after the whole pass (A1 — never per-hit, would splice mid-iteration; the shared
+`dropGems`/`awardKill`/`enemy:killed`/cleanup path — `player-*` cause scores full
+points); (5) `detonateBarrelsInRadius(px,py,R,"player-lightning")` (A8 seam, no-op
+until SPEC-BARRELS); (6) `applyStun(stunSeconds)` (A7, 3 s); (7) `lightningCd =
+cooldown`(10); (8) `emit("ability:cast",{kind:"lightning",killCount})` — a
+**snapshot** payload (no back-reference into G, one-way flow), `killCount` =
+**destroys only** (a resisted Reaper chipped for 5 is NOT counted). Consumes **no**
+gem energy (§5.2, structural null). **Spawners/crates immune by construction** —
+neither `G.spawners` nor `G.crates` is referenced. **Net-new test-affordance
+export:** `abilities.js` now `export { onLightning as __onLightning }` (the handler
+is registered into `player.js` by reference and is otherwise module-local; the
+`__`-prefixed alias lets headless tests drive a cast directly, mirroring
+`enemies.js`'s `__deathSweep`/`__playerShotEnemyPass` — `player.js` still invokes it
+only via the `registerAbility` registry; the STUNNED cast-lock is a player-side
+`tryAbilities` gate, tested there, not re-tested here). No new imports (graph
+unchanged; `emit`/`applyStun`/`sweepDeadEnemies` were already pinned in P2). New
+`test-abilities-lightning.js` (22) green — radius wipe/attribution/sweep, just-
+outside survives, resist chip+survive, free (`gemEnergy` unchanged), `p.stun==3`,
+`lightningCd==10`, barrel spy called once with `(px,py,5×TILE,"player-lightning")`,
+`ability:cast` emits once with `killCount`=destroys-only, plus the cooldown-gate
+no-op/re-fire. Suite **688 total** (was 666, purely additive). Owed by P4: Nova
+cast (`onNova`) + the Nova ring pass in `updateAbilities`; still owed downstream:
+SPEC-BARRELS fill of `registerBarrelDetonation`, and the boot `import
+"./abilities.js"`.)
+(SPEC-ABILITIES Phase 2 — **`abilities.js`
 foundation built** (no Nova/Lightning behaviour yet). New file `src/abilities.js`
 imports config/state + one-way `level-loader` `emit` / `player` `registerAbility`
 +`applyStun` / `enemies` `sweepDeadEnemies` (NONE import it back — graph
@@ -302,9 +335,22 @@ current or the next session starts blind.
   `onNova`/`onLightning` NO-OP stubs registered at load via `registerAbility`.
   Import graph one-way (config/state + `emit`/`registerAbility`+`applyStun`/
   `sweepDeadEnemies`, none import back). Tests: `test-abilities.js` (18, green).
-  Owed by the build pass: Lightning cast body (P3), Nova rings + the ring pass in
-  `updateAbilities` (P4), the SPEC-BARRELS fill of `registerBarrelDetonation`, and
-  the boot `import "./abilities.js"` so `registerAbility` runs before frame 1.
+  **Phase 3 (Lightning cast) done** — `abilities.js` `onLightning` body filled
+  (§5.1, instantaneous): cooldown gate → radius wipe over `G.enemies` (squared-
+  distance edge test `≤ R + e.r`, `R`=5 t=160 px; branch on the `e.resist?.
+  lightning` MARKER — A2, not boss/type — resisted chips `reaperDamage`(5) &
+  survives uncounted, else `hp=0`/`_cause="player-lightning"`/`killCount++`) →
+  `sweepDeadEnemies()` **once** after the whole pass (A1, no per-hit splice) →
+  `detonateBarrelsInRadius(px,py,R,"player-lightning")` (A8 seam, no-op) →
+  `applyStun(3)` (A7) → `lightningCd=10` → `emit("ability:cast",{kind:"lightning",
+  killCount})` (OQ-A1 snapshot, `killCount`=destroys only). Consumes **no** gem
+  energy; spawners/crates immune by construction (never referenced). `onNova`
+  still a NO-OP stub (owed P4). Net-new `export { onLightning as __onLightning }`
+  test affordance (house `__` convention; player still casts only via the
+  `registerAbility` registry). Tests: `test-abilities-lightning.js` (22, green).
+  Owed by the build pass: Nova cast body + Nova ring pass in `updateAbilities`
+  (P4), the SPEC-BARRELS fill of `registerBarrelDetonation`, and the boot
+  `import "./abilities.js"` so `registerAbility` runs before frame 1.
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
 - [ ] §9/§10/§11 Scoring, HUD, render/lighting, audio
@@ -366,8 +412,13 @@ to reuse the placeholder's eligibility-filtered `table`/ramped
 Phase 2**: `addGemEnergy` gem economy [A6/§3], module-local `novaCd`/
 `lightningCd` + `updateAbilities(dt)` cooldown tick [Phase-4 Nova ring pass
 TODO], `initAbilities`, read-only `getCooldowns()`, the A8
-`registerBarrelDetonation` no-op seam, and `onNova`/`onLightning` NO-OP stubs
-registered at load via `registerAbility`; imports config/state + one-way
+`registerBarrelDetonation` no-op seam; `onLightning` FILLED [Phase 3 — §5.1
+instantaneous radius wipe: cooldown gate → `resist?.lightning`-marker branch →
+`sweepDeadEnemies()` once → barrel seam → `applyStun(3)` → `lightningCd=10` →
+`ability:cast` snapshot emit, `killCount`=destroys only; costs no gem energy],
+`onNova` still a NO-OP stub [Phase-4 owed]; both registered at load via
+`registerAbility` + `onLightning` also exported as `__onLightning` for headless
+tests; imports config/state + one-way
 `emit`/`registerAbility`+`applyStun`/`sweepDeadEnemies`, never imported back).
 Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
@@ -378,8 +429,9 @@ Tests:
 `test-enemies-steer.js` (24), `test-enemies-ground.js` (15),
 `test-enemies-wraith.js` (16), `test-enemies-lobber.js` (15),
 `test-enemies-reaper.js` (24), `test-enemies-spawner.js` (28),
-`test-abilities-seams.js` (29), `test-abilities.js` (18) —
-all green (**666 checks total**). Subsystems #1, #2, #3, and #4 (Enemies +
+`test-abilities-seams.js` (29), `test-abilities.js` (18),
+`test-abilities-lightning.js` (22) —
+all green (**688 checks total**). Subsystems #1, #2, #3, and #4 (Enemies +
 spawners) are all COMPLETE: nav consumer layer, combat spine, all 9 roster
 types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire
 Wraith/Lobber/Reaper), and spawners (emission + spawner-as-target) built and
@@ -1297,6 +1349,50 @@ NO Nova/Lightning behaviour yet. Decisions:
   and zeroes both cooldowns (via `getCooldowns`); `updateAbilities` floors at 0
   across many ticks and lazy-inits `G.novas`. House headless harness, real-module
   import, defensive browser stubs. Suite 648 → 666, purely additive.
+
+### 2026-07-06 — SPEC-ABILITIES Phase 3 (`onLightning` cast body) — subsystem #5
+Filled `abilities.js` `onLightning` exactly per §5.1 (instantaneous ability, no
+persistent entity). Nova stays a no-op stub (owed P4). Decisions:
+- **Marker-branch, not type-branch (A2).** The per-enemy magnitude keys off
+  `e.resist?.lightning` (the value-free E9 marker), never `boss`/type — resisted
+  targets take `reaperDamage`(5) and survive; everything else is destroyed. Today
+  only the Reaper carries the marker, but the branch is forward-compatible for
+  future bosses with no #5 change.
+- **`killCount` = destroys only.** A resisted target is chipped, gets **no**
+  `_cause`, and is **not** counted — so the `ability:cast` payload's `killCount`
+  (the NOVACLEAR!/THUNDERSTRUCK! + white-flash driver) excludes survivors. The
+  emit payload is a **snapshot** `{kind:"lightning", killCount}` (one-way flow —
+  subscribers must not reach back into G).
+- **Sweep-after-pass, once (A1).** The enemy loop only sets `hp`/`_cause`; the
+  single `sweepDeadEnemies()` runs AFTER the whole pass, never per-hit (a per-hit
+  splice would corrupt the `for…of` iteration when a cast kills ≥2). Reuses the
+  shared `dropGems`/`awardKill`/`enemy:killed`/nav/light cleanup — `player-lightning`
+  starts with `player-` so `awardKill` scores full points.
+- **Radius test = squared-distance edge test.** `(e.x-px)²+(e.y-py)² ≤ (R+e.r)²`
+  with `R = radiusTiles×TILE` (=160) and a **per-enemy** `e.r` reach — the house
+  AoE idiom (`meleeExchange`/Wraith-explode), avoids a `Math.hypot` per enemy.
+  Spawners/crates are never referenced, so their §5.2 immunity holds by
+  construction, not a special-cased skip. Origin `(px,py)` is `G.player` centre.
+- **Ordering (§5.1):** cooldown gate → enemy pass → `sweepDeadEnemies()` →
+  `detonateBarrelsInRadius(px,py,R,"player-lightning")` (A8 seam, inert until
+  SPEC-BARRELS) → `applyStun(3)` (A7) → `lightningCd=10` → `ability:cast` emit.
+  Costs **no** gem energy (§5.2, structural null — no fuel field touched).
+- **NET-NEW test affordance: `export { onLightning as __onLightning }`.** The
+  handler is registered into `player.js` by reference and is otherwise
+  module-local, so a headless test cannot reach it. Exported under the house
+  `__`-prefix (like `enemies.js`'s `__deathSweep`/`__playerShotEnemyPass`) so a
+  cast can be driven directly; `player.js` still invokes it **only** via the
+  `registerAbility` registry, so the seam contract is unchanged. The STUNNED
+  cast-lock is a player-side `tryAbilities` gate (tested there, per §9's own
+  note), not re-tested at the handler level — the handler gates only on
+  `lightningCd` (§5.1 step 1). No new imports (graph unchanged from P2).
+- **Test:** `test-abilities-lightning.js` (22 checks) — the full §9 Lightning +
+  `ability:cast(Lightning)` clusters (radius wipe + attribution + sweep, just-
+  outside `R+e.r` survives, resist chip-and-survive, `gemEnergy` untouched,
+  `p.stun==3`, `lightningCd==10`, barrel spy called once with
+  `(px,py,5×TILE,"player-lightning")`, `ability:cast` emits once with
+  `killCount`=destroys-only) plus a cooldown-gate no-op/re-fire cluster. Real-
+  module import, emit + barrel spies, defensive browser stubs. Suite 666 → 688.
 
 ## Known open items (non-blocking for build)
 
