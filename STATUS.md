@@ -1,6 +1,77 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-06 (SPEC-BARRELS Phase 3 — **carry/kick integration
+**Last updated:** 2026-07-06 (SPEC-BARRELS Phase 4 — **detonation, the shrapnel
+species, chain reactions + attribution built; the barrels subsystem (#6) is now
+COMPLETE** (B7/B8/B9, §5). **`barrels.js`:** `damageBarrel` hp≤0 no longer a TODO
+— it now only *marks* (subtract hp + tag `_cause`; `fireStateOf === "explode"` is
+the implicit flag); **detonation is COLLECTED + resolved by `updateBarrels`** via
+the new `resolveDetonations()`, called AFTER the roll/impact driving pass (§5.1 —
+never mid-iteration, so a cascade resolves over frames and the shrapnel a
+detonation spawns is walked by the NEXT `updateShrapnel`, not the loop that
+triggered it). `resolveDetonations` collects every hp≤0 barrel in `G.barrels`
+**plus** the carried one (`carriedBarrel()`, spliced OUT of `G.barrels`, B5) into
+one **wave**, then `detonateBarrel` each; a wave of ≥ `explosion.chainCallout`(3)
+emits `chain:reaction {count, owner}` (§5.3, the sanctioned per-wave counter).
+**`detonateBarrel(b)`:** owner = `_cause.startsWith("player-") ? "player" :
+"enemy"` → `spawnShrapnel` (`shrapnel.count`(8) pieces radial ±`jitter` into
+`G.shrapnel`, each `{x,y,vx,vy,r,dmg,health,life:0,owner}` §2.4; **shrapnel `r`
+reuses `CFG.SHOT.r`(6)** — §2.3 has no dedicated dial, flagged for #7/tuning) →
+`emit("barrel:exploded", {x,y,owner,hitStopFrames,shakeDur,shakeFullTiles,
+shakeZeroTiles})` (snapshot FX for #10) → `dropBarrelLight` (mirrors enemies.js
+`removeLight` — the persistent `{source:barrel}` emitter must not outlive the
+barrel) → **markNavDirty + splice from `G.barrels`**, OR for **detonate-in-hand**
+(B5, `b === carriedBarrel()`): centre the shrapnel on the **player** and call
+`player.js notifyCarriedBarrelDestroyed()` (clears carry, loco→NORMAL, **NO
+re-insert, NO markNavDirty** — it was never a blocker while held); post-hit
+i-frames cap the self-damage when the centred burst strikes the player next
+`updateShrapnel` (§2.1). **NO direct damage/force — detonation is shrapnel-only**
+(B8, the OPPOSITE of ADD `detonate()`). **`updateShrapnel(dt)` (B7, the shrapnel
+SPECIES — its own `G.shrapnel`, NOT the `Shot` shape):** per piece — `slideShrapnel`
+(per-axis FREE reflect off walls[`isWall` centre-tile] + crates[`crateAt`, half-tile
+radius], full retention, **no health cost**; a crate contact also gets **pushed
+`shrapnel.cratePush`(16px=0.5t)** along the piece's incoming velocity — crates take
+NO damage, have no `hp` field, §13.16) → `life += dt` → **damage-exchange** (−1
+health per damaging hit, in order enemies→player→barrels→spawners, stop once spent):
+enemy `hp -= dmg` + tag `player-shrapnel`/`enemy-shrapnel` on lethal; player
+`applyDamageToPlayer(dmg, owner+"-shrapnel")` (self-gates on i-frames); barrel
+`damageBarrel(b, dmg, tag)` → **chain** (the barrel ADOPTS the piece's owner via
+`_cause`, so `"player-shrapnel".startsWith("player-")` propagates a player chain,
+`"enemy-shrapnel"` correctly does not); spawner `hp -= dmg` + tag — destroy the
+piece at `health ≤ 0` or `life ≥ lifespan`(1.2s); after the pass ONE
+`sweepDeadEnemies()` + `sweepDeadSpawners()` (gated on a hit-bool, never per-hit).
+**`updateShrapnel` NEVER spawns shrapnel** (detonation does, in `updateBarrels`) —
+that structural split is what keeps a cascade frame-spaced. **`updateBarrels`** now
+calls `resolveDetonations()` at its tail (after the existing roll-impact
+`sweepDeadEnemies`). **New imports** (still one-way barrels→player, player never
+imports barrels): `applyDamageToPlayer`, `carriedBarrel`, `notifyCarriedBarrelDestroyed`
+from `player.js` (the §1-B1 sanctioned edge; `applyKnockbackToPlayer` NOT imported —
+detonation applies no direct force). **Attribution tag contract (B9, the chain of
+custody #9 scoring rides):** a barrel stores `_cause` (last-damager-wins via
+`damageBarrel`); on detonation owner = `_cause.startsWith("player-")`; each shrapnel
+piece carries `owner`; a shrapnel-killed victim is tagged `player-shrapnel`/
+`enemy-shrapnel` and routed through the shared `sweepDeadEnemies`/`sweepDeadSpawners`
+(whose `awardKill` scores `player-*`, zeroes the rest); a shrapnel-damaged barrel
+adopts the piece's owner. Cause vocabulary introduced/flowing: `player-kick`,
+`player-shrapnel`, `enemy-shrapnel` (+ existing `player-bullet`/`player-lightning`/
+`wraith-aoe`/`enemy-lob`/`enemy-shot`). New `test-barrels-detonate.js` (47, green):
+detonation (8 owner-tagged shrapnel, `barrel:exploded` w/ FX payload, markNavDirty,
+splice, NO direct damage, light dropped), collect-not-mid-iteration (non-rolling
+shot-killed barrels detonate), detonate-in-hand (centred/carry-cleared/loco NORMAL/
+not-re-inserted/i-frame cap), owner derivation (player-*/enemy causes), scoring by
+owner, chain propagation (player+enemy), chain:reaction (≥3 emits, 2 does not). New
+`test-barrels-shrapnel.js` (35, green): motion + 1.2s lifespan, free wall+crate
+bounce (no health cost), crate 0.5t push + no-hp, −1 health per hit vs enemy/player/
+barrel/spawner, spent-piece destroy, enemy+spawner deaths route through the sweeps.
+Full suite reran green, **969 total** (was 887, purely additive). **Subsystem #6
+(Barrels) is COMPLETE** — entity/ladder/damage-intake, carry/kick/roll, detonation/
+shrapnel/chains all built and tested headlessly. **Still owed downstream (NOT
+barrels scope):** the boot `import "./barrels.js"` + wiring `updateBarrels`/
+`updateShrapnel`/`shotsVsBarrels` into the main loop (integration phase, same debt
+as `abilities.js`); **#7** rendering barrel fire/light from `fireStateOf` + the
+`G.lights {source:barrel}` emitter; **#10** rendering the `barrel:exploded` /
+`chain:reaction` FX; **SPEC-SCORING** replacing `awardKill` and inheriting the
+attribution tags above unchanged.)
+(SPEC-BARRELS Phase 3 — **carry/kick integration
 + roll physics built** (B3/B5/B6, §4). **`player.js`:** `tryPickup` now also
 picks up barrels (a `firstOverlappingBarrel` companion to the crate check —
 **crate-FIRST order preserved**; splice from `G.barrels`, `markNavDirty`,
@@ -321,8 +392,10 @@ melee knockback can't wedge it on a wall it phases through). `test-enemies-reape
 (24) green; suite **591 total**. Roster still owed: **spawners** only.)
 (SPEC-ENEMIES Phase 7 — **Lobber added** (§6.1.4, cover-seek, ADAPTS ADD `updateSorter`) + the `G.ebolts`/`updateEbolts` arced-ordnance system it is the sole producer of. `updateLobber` (`enemies-ai.js`) is **NOT an A\* navigator** — cover-seek via `moveBody`+`groundBlockerFilter` only, no `addNavigator`/`steerNavigator`, throttled LOS (`losCheckEvery` 0.12s, ADD). Exposed (`canSee`): panic-flee AWAY at `fleeMul(0.95×)` with an ADD-verbatim wandering-jitter angle, hold fire. In cover (`!canSee`): advance at `0.40×`, lob every `lobEvery(2.5s)` within `lobRange(9t)`. The lob is minted via a registered `registerLobberFire` seam (same register-callback shape as the Spider web/Shooter arrow, R6 — `enemies-ai.js` never imports `G.ebolts`) filled in `enemies.js`: pushes a `kind:"arc"` entry into `G.ebolts` (NOT a `Shot`/`G.shots` — E1) with `owner:"enemy"`, landing at the player's fire-time position **perturbed by a uniform-disc random offset within `G.ramp.lobberErrorRadius`** (net-new vs ADD's exact-target `fireEnemyArc` — sampled via `angle=rand·2π, radius=√rand·errR` for uniform area coverage, not center-biased). `updateEbolts` (`enemies.js`, replacing the Phase-3 no-op hook in step 7) is ADD `updateArc` ported near-verbatim: interpolates ground pos launch→landing over `dur(airtime 1.0s)`, parabolic `height` for the renderer, wall-agnostic in flight (never collides in transit); at `t≥dur` splats + AoE-tests the player ONLY at `blast(1.25t)+player.r` → `applyDamageToPlayer(2,"enemy-lob")` + the registered `detonateBarrelsInRadius` seam, then removes the entry. Self-contained in step 7 (not moved by `player.js`'s `updateShots` — arced ordnance is a distinct timed kind from a `Shot`, E1), so no cross-file frame-ordering assumption applies to it, unlike the straight-shot passes. `test-enemies-lobber.js` (15) green; suite **567 total**. Roster still owed: the Reaper and spawners.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
-incl. crates §7.1), #3 (Pathfinding), #4 (Enemies + spawners), and #5 (Abilities
-— gem economy + Nova + Lightning) are BUILT and tested headlessly.**
+incl. crates §7.1), #3 (Pathfinding), #4 (Enemies + spawners), #5 (Abilities
+— gem economy + Nova + Lightning), and #6 (Barrels + shrapnel §7.2 — entity/
+ladder/carry/kick/roll/detonation/shrapnel/chains) are BUILT and tested
+headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
 the A\* solver (`findPath`, Phase 2). Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -359,10 +432,9 @@ current or the next session starts blind.
   (integrate/range-expiry/two-source ricochet: crates-always + Bounce-walls,
   per-axis, owner+dmg retained, range not reset). Damage-to-targets deferred to
   #4/combat (enemies/barrels don't exist yet).
-- [ ] §7 Interactive objects — **crates (§7.1) BUILT** (carry physics in `player.js`,
-  crate-always ricochet in `projectiles.js`); **barrels (§7.2), shrapnel — SPEC-BARRELS
-  Phase 1 (enabling edits) + Phase 2 (`barrels.js` entity/ladder/damage-intake/seam-fill)
-  + Phase 3 (carry/kick + roll physics) done:** `CFG.BARREL` block in `config.js` (§2.3);
+- [x] §7 Interactive objects — **crates (§7.1) BUILT** (carry physics in `player.js`,
+  crate-always ricochet in `projectiles.js`); **barrels (§7.2) + shrapnel (§7.2.4) —
+  SPEC-BARRELS COMPLETE (Phases 1–4):** `CFG.BARREL` block in `config.js` (§2.3);
   `enemies.js` exports `sweepDeadSpawners` alias (B9) + the Wraith/Lobber
   `detonateBarrelsInRadius` call sites pass a 5th `damage` arg (B10). `src/barrels.js`
   (Phase 2): decorates the loader's `barrel` placeholder (`hp`/`r`/`vx`/`vy`/`rolling`/
@@ -376,9 +448,18 @@ current or the next session starts blind.
   barrel branch); `enemies.js` `meleeExchange` carried-barrel chip (B5) via the new
   `registerBarrelDamage` seam; `barrels.js` `kickBarrel` + `updateBarrels(dt)` roll
   integrator (the 2nd sanctioned `moveBody` exception, ADD `slideStep` reflect model,
-  B3) + the `registerBarrelKick` fill into `player.js`. **Still owed:** detonation
-  resolution + shrapnel species + chain reactions (Phase 4, B7–B9) — `damageBarrel` hp≤0
-  is still a TODO; `notifyCarriedBarrelDestroyed` awaits its detonate-in-hand caller.
+  B3) + the `registerBarrelKick` fill into `player.js`. **Phase 4 (detonation +
+  shrapnel + chains, B7–B9):** `barrels.js` `resolveDetonations()` (collect-then-
+  resolve in `updateBarrels`, never mid-iteration) + `detonateBarrel` (owner derive,
+  `spawnShrapnel`, `barrel:exploded` FX emit, `dropBarrelLight`, markNavDirty+splice
+  OR detonate-in-hand via `notifyCarriedBarrelDestroyed`) + `updateShrapnel(dt)` (the
+  §7.2.4 species in `G.shrapnel`: free wall/crate bounce + crate push, −1 health per
+  damaging hit vs enemy/player/barrel/spawner, chain adoption, sweeps) + `chain:reaction`
+  callout. `damageBarrel` hp≤0 now only marks (no splice/shrapnel there). **Barrels
+  subsystem COMPLETE.** Downstream (NOT barrels scope): boot `import "./barrels.js"` +
+  wiring `updateBarrels`/`updateShrapnel`/`shotsVsBarrels` into the main loop; #7
+  fire/light render; #10 `barrel:exploded`/`chain:reaction` FX; SPEC-SCORING inherits
+  the attribution tags.
 - [x] §6.4 Pathfinding — **BUILT.** `nav.js` complete. **Phase 1
   (infrastructure):** mask predicates (`isNavBlocked`, GROUND/PHANTOM),
   mask-split occupancy grid derived from live `G` arrays (D3), dirty/version
@@ -651,12 +732,13 @@ emit at cast]; both registered at load via `registerAbility` + both exported as
 `__onNova`/`__onLightning` for headless tests; Nova immunity is by OMISSION
 [never references `G.spawners`/`G.crates`/`G.barrels`]; imports config/state +
 one-way `emit`/`registerAbility`+`applyStun`/`sweepDeadEnemies`, never imported
-back). `barrels.js` (**SPEC-BARRELS #6, Phase 2 + Phase 3**: barrel entity
+back). `barrels.js` (**SPEC-BARRELS #6, COMPLETE (Phases 2–4)**: barrel entity
 decoration [`getEntityFactory("barrel")` decorate-pattern], `fireStateOf`/
-`lightRadiusOf` [pure fns of hp], `damageBarrel` [the single intake sink; hp≤0 is
-a marked Phase-4 TODO], the real `detonateBarrelsInRadius` [filled into BOTH
-`enemies.js`'s and `abilities.js`'s `registerBarrelDetonation`], `shotsVsBarrels`
-[self-contained shot-consume pass], `initBarrels`; **Phase 3:** `kickBarrel`
+`lightRadiusOf` [pure fns of hp], `damageBarrel` [the single intake sink; hp≤0
+now only marks — detonation resolved by `updateBarrels`], the real
+`detonateBarrelsInRadius` [filled into BOTH `enemies.js`'s and `abilities.js`'s
+`registerBarrelDetonation`], `shotsVsBarrels` [self-contained shot-consume pass],
+`initBarrels`; **Phase 3:** `kickBarrel`
 [re-insert + roll velocity, registered into `player.js` via `registerBarrelKick`]
 + `updateBarrels(dt)` [the bespoke roll integrator — the **2nd sanctioned
 `moveBody` exception** after `phantomMover`: ADD `slideStep` reflect model,
@@ -664,11 +746,18 @@ a marked Phase-4 TODO], the real `detonateBarrelsInRadius` [filled into BOTH
 `<stopSpeed`, rolling-impact enemy −1/barrel −1/−40% via `damageBarrel
 "player-kick"` + ONE `sweepDeadEnemies`] + `damageBarrel` registered into
 `enemies.js`'s `registerBarrelDamage` seam [the carried-barrel melee chip];
+**Phase 4:** `resolveDetonations` [collect-then-resolve wave at `updateBarrels`
+tail, never mid-iteration] + `detonateBarrel` [owner derive from `_cause`,
+`spawnShrapnel`, `barrel:exploded` FX emit, `dropBarrelLight`, markNavDirty+splice
+OR detonate-in-hand via `notifyCarriedBarrelDestroyed`] + `updateShrapnel(dt)` [the
+§7.2.4 species in `G.shrapnel`: `slideShrapnel` free wall/crate bounce + crate
+push, −1 health per damaging hit vs enemy/player/barrel/spawner w/ chain adoption,
+sweeps] + `chain:reaction` callout; shrapnel `r` = `CFG.SHOT.r` [no §2.3 dial];
 imports config/state/world/level-loader/`enemies.js`'s `sweepDeadEnemies`+
 `sweepDeadSpawners`+`registerBarrelDamage`/`abilities.js`'s
-`registerBarrelDetonation`/`player.js`'s `registerBarrelKick` [the sanctioned
-barrels→player edge], never imported back [R6]; still owed: detonation/shrapnel
-resolution [Phase 4]).
+`registerBarrelDetonation`/`player.js`'s `registerBarrelKick`+`applyDamageToPlayer`+
+`carriedBarrel`+`notifyCarriedBarrelDestroyed` [the sanctioned barrels→player
+edge], never imported back [R6]).
 Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
 `test-level-loader.js` (40), `test-level-content.js` (79),
@@ -681,16 +770,18 @@ Tests:
 `test-abilities-seams.js` (29), `test-abilities.js` (18),
 `test-abilities-lightning.js` (22), `test-abilities-nova.js` (54),
 `test-barrels-seams.js` (40), `test-barrels.js` (44),
-`test-barrels-carry.js` (61) —
-all green (**887 checks total**). Subsystems #1, #2, #3, #4 (Enemies +
-spawners), and #5 (Abilities) are all COMPLETE: nav consumer layer, combat
-spine, all 9 roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton
-Shooter/Fire Wraith/Lobber/Reaper), spawners (emission + spawner-as-target),
-and the gem economy + Nova + Lightning abilities — all built and tested
-headlessly. SPEC-BARRELS (#6, in progress): Phase 1 (enabling edits) + Phase 2
-(`barrels.js` entity/ladder/damage-intake/seam-fill) + Phase 3 (carry/kick +
-roll physics) done; Phase 4 (detonation resolution / shrapnel / chain reactions)
-owed.
+`test-barrels-carry.js` (61), `test-barrels-detonate.js` (47),
+`test-barrels-shrapnel.js` (35) —
+all green (**969 checks total**). Subsystems #1, #2, #3, #4 (Enemies +
+spawners), #5 (Abilities), and #6 (Barrels) are all COMPLETE: nav consumer
+layer, combat spine, all 9 roster types (Ghost/Skeleton/Spider/Bat/Zombie/
+Skeleton Shooter/Fire Wraith/Lobber/Reaper), spawners (emission +
+spawner-as-target), the gem economy + Nova + Lightning abilities, and the barrel
+subsystem (entity/ladder/carry/kick/roll/detonation/shrapnel/chains) — all built
+and tested headlessly. SPEC-BARRELS (#6) COMPLETE: Phase 1 (enabling edits) +
+Phase 2 (`barrels.js` entity/ladder/damage-intake/seam-fill) + Phase 3 (carry/
+kick + roll physics) + Phase 4 (detonation resolution / shrapnel species / chain
+reactions) all done.
 
 ## Implementation sequencing (agreed order)
 
