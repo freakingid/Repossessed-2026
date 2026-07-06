@@ -39,8 +39,8 @@ import { emit, registerEntityFactory } from "./level-loader.js";
 import { makeShot } from "./projectiles.js";
 import {
   scheduleRepaths, groundMover, updateGhost, updateSkeleton, updateSpider,
-  updateBat, updateZombie, updateSkeletonShooter, registerSpiderWebFire,
-  registerShooterFire, removeNavigator,
+  updateBat, updateZombie, updateSkeletonShooter, updateFireWraith,
+  registerSpiderWebFire, registerShooterFire, removeNavigator,
 } from "./enemies-ai.js";
 
 // Spider web-fire seam (§6.1.6) — enemies-ai.js's updateSpider calls this to
@@ -70,6 +70,14 @@ registerShooterFire((e, ux, uy) => {
   }));
 });
 
+// Barrel-detonation seam (§7) — barrels don't exist yet (SPEC-BARRELS is
+// post-#4); mirrors the loader's registered-sink pattern (registerBlockerSink)
+// so the Wraith's EXPLODE (and later the Lobber's lob) can call into barrel
+// damage without enemies.js importing a module that doesn't exist. No-op
+// default; SPEC-BARRELS registers the real fn.
+let detonateBarrelsInRadius = () => {};
+export function registerBarrelDetonation(fn) { detonateBarrelsInRadius = fn; }
+
 /* ---- Per-type AI dispatch (step 6) -------------------------------------- *
    Keyed by entity type. Later phases add their updater here; this phase ships
    only the Ghost. Each handler is (e, player, dt) => void and does the type's
@@ -81,6 +89,7 @@ const aiByType = new Map([
   ["bat", updateBat],
   ["zombie", updateZombie],
   ["skeletonShooter", updateSkeletonShooter],
+  ["fireWraith", fireWraithAI],
 ]);
 
 // Test seam (structural R2 frame-order proof): inject a synthetic type's AI so a
@@ -140,6 +149,19 @@ registerEntityFactory("zombie", makeZombie);
 
 export function makeSkeletonShooter(p) { return makeEnemy("skeletonShooter", p); }
 registerEntityFactory("skeletonShooter", makeSkeletonShooter);
+
+// Fire Wraith self-glow (§8.4, dark levels) — a seam to #7: register the light
+// emitter here (no draw code). G.lights is the loader's already-reserved
+// light-emitter registry array (cleared with the other transients on load).
+export function makeFireWraith(p) {
+  const e = makeEnemy("fireWraith", p);
+  if (!G.lights) G.lights = [];
+  // source: e (not a copied x/y) — #7 reads the live entity position each
+  // frame so the glow tracks the Wraith without this seam re-syncing coords.
+  G.lights.push({ source: e, radius: CFG.ENEMY.fireWraith.glowRadius * CFG.TILE });
+  return e;
+}
+registerEntityFactory("fireWraith", makeFireWraith);
 
 /* =========================================================================
    THE SPINE
@@ -260,6 +282,14 @@ function dropGems(e) {
     G.pickups.push({ type: "gem", x: e.x, y: e.y, value: CFG.GEM.energy });
 }
 
+// Drop a dead entity's registered light emitter (§8.4 seam — Wraith self-glow
+// today; harmless no-op for any type that never registered one).
+function removeLight(e) {
+  if (!G.lights || G.lights.length === 0) return;
+  const i = G.lights.findIndex((l) => l.source === e);
+  if (i >= 0) G.lights.splice(i, 1);
+}
+
 // Step 5 (§6.3) — death sweep. Each hp≤0 enemy: drop gems (always), awardKill,
 // emit enemy:killed, splice out. A mid-FLASH Wraith removed here is DEFUSED (its
 // EXPLODE branch in step 6 never runs) — the R2/E11 invariant.
@@ -275,6 +305,7 @@ function deathSweep() {
     emit("enemy:killed", { type: e.type, x: e.x, y: e.y, points: e.points, cause });
     if (e.contact) clearMeleePair(e);
     if (e.nav) removeNavigator(e);   // drop the A* registry entry (Zombie/Shooter/Wraith/Reaper)
+    removeLight(e);
     enemies.splice(i, 1);
   }
 }
@@ -287,6 +318,48 @@ export function awardKill(e, cause) {
   if (typeof cause === "string" && cause.startsWith("player-")) G.score += e.points;
 }
 
+// Fire Wraith EXPLODE (§6.1.8) — AoE radius explodeRadius at the Wraith's own
+// position: explodeDmg to the player, friendly-fire damage to every OTHER
+// enemy in radius (those deaths score 0 via "wraith-aoe", E8; Q3 baked-in:
+// they still drop gems — dropGems/awardKill both live in the shared death
+// sweep, called once after this whole pass), triggers the barrel seam, and
+// does NOT damage crates (§13.16 crate indestructibility wins — this AoE
+// simply never touches G.crates). The Wraith itself is tagged to die in its
+// own blast. Deaths are NOT spliced here — hp/_cause are set and the shared
+// deathSweep() (§6.3, already imported-in-scope) runs once after the whole
+// AI tick, reusing the one gem/awardKill/emit/nav/light cleanup path rather
+// than duplicating it inline.
+function explodeFireWraith(wraith) {
+  const cfg = CFG.ENEMY.fireWraith;
+  const r = cfg.explodeRadius * CFG.TILE;
+  const p = G.player;
+  if (p && p.loco !== "DEAD") {
+    const dx = p.x - wraith.x, dy = p.y - wraith.y;
+    if (dx * dx + dy * dy <= r * r) applyDamageToPlayer(cfg.explodeDmg, "wraith-aoe");
+  }
+  for (const other of G.enemies) {
+    if (other === wraith) continue;
+    const dx = other.x - wraith.x, dy = other.y - wraith.y;
+    if (dx * dx + dy * dy > r * r) continue;
+    other.hp -= cfg.explodeDmg;
+    if (other.hp <= 0 && !other._cause) other._cause = "wraith-aoe";
+  }
+  detonateBarrelsInRadius(wraith.x, wraith.y, r, "wraith-aoe");
+  wraith.hp = 0;
+  wraith._cause = "wraith-aoe";   // dies in its own blast
+}
+
+// Fire Wraith AI dispatch entry (step 6) — runs the FSM/steer updater, then
+// checks the explode flag it may have set THIS frame (FLASH timer completing
+// only ever happens here, in step 6, after step 5's death sweep already ran —
+// R2/E11: a Wraith shot down before FLASH completes was already removed in
+// step 5 and never reaches this function at all this frame).
+const pendingWraithExplosions = [];
+function fireWraithAI(e, player, dt) {
+  updateFireWraith(e, player, dt);
+  if (e.wraith && e.wraith.explode) pendingWraithExplosions.push(e);
+}
+
 // Step 6 (§6) — AI tick over survivors. Emergence gate first (spawn>0 ⇒ decrement
 // and skip — the enemy exists but does not act or collide, E4), then knockback
 // integration (§6.6), then the per-type move/steer + attack. A synthetic entity
@@ -295,11 +368,20 @@ export function awardKill(e, cause) {
 function enemyAITick(dt) {
   const enemies = G.enemies, player = G.player;
   if (!enemies) return;
+  pendingWraithExplosions.length = 0;
   for (const e of enemies) {
     if (e.spawn > 0) { e.spawn -= dt; continue; }   // emergence gate (E4)
     integrateEnemyKnockback(e, dt);
     const ai = aiByType.get(e.type);
     if (ai) ai(e, player, dt);
+  }
+  // EXPLODE resolution: apply AoE damage for every Wraith that finished FLASH
+  // this frame, then run ONE death sweep for any resulting deaths (self +
+  // friendly-fire) — reuses the shared gem/awardKill/emit/nav/light cleanup.
+  if (pendingWraithExplosions.length > 0) {
+    for (const w of pendingWraithExplosions) explodeFireWraith(w);
+    pendingWraithExplosions.length = 0;
+    deathSweep();
   }
 }
 

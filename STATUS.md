@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 5 — **GROUND A\* roster added: Skeleton Shooter, Zombie** (§6.1.3/§6.1.7), the first roster members to actually ride the Phase-2 nav consumer layer end-to-end. `updateSkeletonShooter`/`updateZombie` added to `enemies-ai.js`; `makeSkeletonShooter`/`makeZombie` factories added to `enemies.js`, registered via `registerEntityFactory`, and dispatched in `aiByType`. Zombie is pure `addNavigator`+`steerNavigator` (no FSM) — proof the scheduler/steering built in Phase 2 drives a real entity. Skeleton Shooter is FSM WANDER→HUNT (LOS-acquire, awareDecay 8s, ambient-roam waypoints via `world.randomFloorTile`) with a stationary halt→windup(0.4s)→fire→cooldown(1.5s) shoot sequence gated on `G.ramp.shooterStopToShoot`; arrow fired via a registered `registerShooterFire` seam (same shape as the Spider's web) so `enemies-ai.js` still never imports `projectiles.js`/`G.shots` (R6). **Bug found and fixed in the same phase:** the death sweep never called `removeNavigator`, so any A\*-registered enemy (Zombie/Shooter now, Wraith/Reaper later) would leak a stale entry in `enemies-ai.js`'s navigator registry on death — fixed by calling `removeNavigator(e)` in `deathSweep` when `e.nav` exists (see decision log). `test-enemies-ground.js` (15) green; suite **536 total**. Roster still owed: Lobber, Fire Wraith, the Reaper, spawners, and arced ordnance.)
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 6 — **Fire Wraith added** (§6.1.8, walking bomb) + the barrel-detonation seam. `updateFireWraith` (FSM `APPROACH→FLASH`, `enemies-ai.js`) is a GROUND A* navigator like the Zombie/Shooter — `APPROACH` steers full A* at `0.50×`; within `armDist(1.5t)` it flips to `FLASH` and continues steering at `flashMul(0.5×)` (a temporary `e.speed` scale-then-restore around one `steerNavigator` call, so the shared nav layer needed no new multiplier hook) until `flashDur(0.8s)` elapses, at which point it only SETS a sticky `e.wraith.explode=true` flag — it never resolves the AoE itself. **R2/E11 concretely proven** (not just structurally, as Phase 3 did): `enemies.js`'s new `fireWraithAI` wraps `updateFireWraith` in the step-6 dispatch, collecting any newly-flagged explosions into a same-frame queue; EXPLODE resolution (`explodeFireWraith`) runs AFTER the whole step-6 AI loop (still step 6, still after step 5's death sweep) — 4 dmg to the player in `explodeRadius(2t)`, friendly-fire damage to every other enemy in radius (tagged `"wraith-aoe"`, 0 score via the existing `awardKill` gate, gems still drop — Q3), the registered `detonateBarrelsInRadius` seam called, crates untouched (the AoE never reads `G.crates`), then ONE extra `deathSweep()` call resolves all resulting deaths (self + friendly-fire) through the existing gem/awardKill/emit/nav/light cleanup path rather than duplicating it. A Wraith shot down mid-FLASH is removed by the ordinary step-5 sweep and never reaches `fireWraithAI` this frame at all — defused, by construction of the existing 7-step order, no new ordering code needed. **Barrel-detonation seam**: `registerBarrelDetonation(fn)` in `enemies.js`, no-op default, mirrors the loader's sink pattern — barrels don't exist yet (SPEC-BARRELS, post-#4). **Light-emitter seam (§8.4)**: `makeFireWraith` pushes `{source: e, radius: glowRadius×TILE}` into `G.lights` (the loader's already-reserved, previously-unused registry array) and `deathSweep`'s new `removeLight(e)` helper (keyed by `source ===`) cleans it up on death — `source` is a live entity reference, not a copied x/y, so #7 reads the Wraith's current position each frame with no re-sync needed. `test-enemies-wraith.js` (16) green; suite **552 total**. Roster still owed: Lobber, the Reaper, spawners, and arced ordnance.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
 incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
@@ -102,9 +102,35 @@ current or the next session starts blind.
   still never imports `projectiles.js`, R6). **Fixed a real gap found this
   phase:** `deathSweep` never called `removeNavigator`, leaking A\*-registered
   navigators on death — now calls it when `e.nav` exists (see decision log).
-  Tests: `test-enemies-ground.js` (15, green). Roster still owed: Lobber, Fire
-  Wraith, the Reaper, spawners (E4), arced ordnance/`updateEbolts` (E1), and
-  the Reaper PHANTOM mover (R4).
+  Tests: `test-enemies-ground.js` (15, green). **Phase 6 (Fire Wraith + barrel
+  seam) BUILT** — `updateFireWraith` (§6.1.8) added to `enemies-ai.js`: FSM
+  `APPROACH` (full GROUND A\*, `0.50×`) → `FLASH` (within `armDist` 1.5t;
+  continues steering at `flashMul` 0.5× via a temporary `e.speed` scale/restore
+  around one `steerNavigator` call) → sets a sticky `e.wraith.explode` flag
+  when `flashDur`(0.8s) completes (it does NOT resolve the AoE itself — R2/E11
+  keeps that in `enemies.js`, one layer down). `enemies.js` adds `fireWraithAI`
+  (the step-6 dispatch entry: runs the updater, queues any newly-flagged
+  explosions) + `explodeFireWraith` (resolved AFTER the whole step-6 AI loop,
+  still before step 7): `explodeDmg`(4) to the player and every OTHER enemy in
+  `explodeRadius`(2t) — friendly-fire deaths tagged `"wraith-aoe"` (0 score via
+  the existing `awardKill` gate, gems still drop, Q3), the Wraith itself tagged
+  to die in its own blast, the new `registerBarrelDetonation` seam called,
+  crates untouched (the AoE never reads `G.crates`) — then ONE extra
+  `deathSweep()` call resolves every resulting death through the existing
+  gem/awardKill/emit/nav/light cleanup path (no duplicated death-handling
+  code). **R2 defuse is structural, not new code:** a Wraith shot down
+  mid-FLASH is removed by the ordinary step-5 sweep and `fireWraithAI` simply
+  never runs for it that frame — the existing 7-step order already guarantees
+  this. **Barrel-detonation seam:** `registerBarrelDetonation(fn)` in
+  `enemies.js`, no-op default, mirrors the loader's sink pattern (barrels are
+  SPEC-BARRELS, post-#4). **Light-emitter seam (§8.4):** `makeFireWraith`
+  pushes `{source: e, radius: glowRadius×TILE}` into `G.lights` (the loader's
+  previously-unused registry array); `deathSweep`'s new `removeLight(e)`
+  (matched by `source ===`) cleans it up on death; `source` is a live entity
+  reference so #7 reads the current position every frame, no re-sync needed.
+  Tests: `test-enemies-wraith.js` (16, green). Roster still owed: Lobber, the
+  Reaper, spawners (E4), arced ordnance/`updateEbolts` (E1), and the Reaper
+  PHANTOM mover (R4).
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -126,16 +152,19 @@ corner-cut, deterministic]; imports config/state/world/level-loader only, leaf
 w.r.t. gameplay). `enemies-ai.js` (nav consumer layer + full roster of steerers:
 registry + repath scheduler + round-robin budget + dirty gate + waypoint
 steering + direct-steer fallback + `updateGhost`/`updateSkeleton`/
-`updateSpider`/`updateBat`/`updateZombie`/`updateSkeletonShooter` + the shared
-blocked-ε `isBlocked` helper + `registerSpiderWebFire`/`registerShooterFire`
-seams; imports config/state/world/nav only, sole consumer of
-`consumeDirtyTiles` [R1], never imported back [R6]). `enemies.js` (the combat
-spine + roster factories: 7-step `tickEnemies` +
-player-shot/melee/death-sweep/`awardKill`/knockback/enemy-shot passes +
-`makeGhost`/`makeSkeleton`/`makeSpider`/`makeBat`/`makeZombie`/
-`makeSkeletonShooter` factories + the Spider web-fire and Shooter arrow-fire
-callbacks (imports `projectiles.js` `makeShot`); `deathSweep` now calls
-`removeNavigator` for any `e.nav`-bearing enemy (Phase 5 fix); imports
+`updateSpider`/`updateBat`/`updateZombie`/`updateSkeletonShooter`/
+`updateFireWraith` + the shared blocked-ε `isBlocked` helper +
+`registerSpiderWebFire`/`registerShooterFire` seams; imports
+config/state/world/nav only, sole consumer of `consumeDirtyTiles` [R1], never
+imported back [R6]). `enemies.js` (the combat spine + roster factories: 7-step
+`tickEnemies` + player-shot/melee/death-sweep/`awardKill`/knockback/enemy-shot
+passes + `makeGhost`/`makeSkeleton`/`makeSpider`/`makeBat`/`makeZombie`/
+`makeSkeletonShooter`/`makeFireWraith` factories + the Spider web-fire, Shooter
+arrow-fire, and `fireWraithAI`/`explodeFireWraith` EXPLODE-resolution callbacks
+(imports `projectiles.js` `makeShot`); `deathSweep` now calls `removeNavigator`
+for any `e.nav`-bearing enemy (Phase 5 fix) AND `removeLight` for any
+light-registered enemy (Phase 6, Wraith); new `registerBarrelDetonation` seam
+(no-op default, SPEC-BARRELS owed); imports
 config/state/world/player-sinks/level-loader/projectiles/enemies-ai, never
 imported back [R6]). Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
@@ -143,11 +172,12 @@ imported back [R6]). Tests:
 `test-level-generator.js` (20), `test-level-integration.js` (16),
 `test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
 `test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66),
-`test-enemies-steer.js` (24), `test-enemies-ground.js` (15) —
-all green (**536 checks total**). Subsystems #1, #2, and #3 complete; #4
-(Enemies) has its foundation, nav consumer layer, combat spine, and 6 of 9
-roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter) built; Lobber,
-Fire Wraith, the Reaper, spawners, and arced ordnance still pending.
+`test-enemies-steer.js` (24), `test-enemies-ground.js` (15),
+`test-enemies-wraith.js` (16) —
+all green (**552 checks total**). Subsystems #1, #2, and #3 complete; #4
+(Enemies) has its foundation, nav consumer layer, combat spine, and 7 of 9
+roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire Wraith)
+built; Lobber, the Reaper, spawners, and arced ordnance still pending.
 
 ## Implementation sequencing (agreed order)
 
@@ -834,6 +864,80 @@ decisions:
   open-room setup did exactly that, invalidating the test); Zombie corridor
   advance, barricade re-route via `markNavDirty`, and `findPath→null` direct-
   steer degrade on a fully boxed goal.
+
+### 2026-07-05 — Fire Wraith (walking bomb) + barrel-detonation/light seams — Phase 6 (SPEC-ENEMIES)
+The Fire Wraith (§6.1.8) is the third GROUND A* roster member, and the first
+whose AI-tick action (EXPLODE) must itself resolve combat (damage/death) —
+every earlier A* type (Zombie, Skeleton Shooter) only moves or fires a shot in
+step 6, leaving damage resolution to the shot-hit passes. Load-bearing
+decisions:
+- **The updater only sets a flag; `enemies.js` resolves the explosion.**
+  `updateFireWraith` (enemies-ai.js) runs the `APPROACH→FLASH` FSM and, when
+  `flashDur` completes, sets `e.wraith.explode = true` and returns — it never
+  touches the player, other enemies, or barrels (that would need
+  player-sinks/projectiles imports, breaking the nav/steer layer's R6 import
+  discipline). `enemies.js`'s new `fireWraithAI` (the step-6 dispatch entry)
+  calls the updater, then checks the flag and queues the entity into a
+  module-level `pendingWraithExplosions` list; `explodeFireWraith` (the actual
+  AoE) runs once, AFTER the whole step-6 `for` loop finishes — not inline
+  mid-loop. This sidesteps mutating `G.enemies` (splicing dead entries) while
+  a `for...of` over that same array is still in flight for other entities.
+- **EXPLODE deaths (including the Wraith's own) are NOT spliced by
+  `explodeFireWraith` itself — they're tagged (`hp=0`/`_cause`) and resolved by
+  ONE extra call to the existing `deathSweep()` right after the queue drains.**
+  This reuses the one gem-drop/awardKill/emit/`removeNavigator`/`removeLight`
+  cleanup path instead of duplicating death-handling inline for the AoE case.
+  Consequence worth knowing: an AoE death this way runs `deathSweep()` TWICE in
+  one `tickEnemies` call on an explosion frame (once at step 5 for the normal
+  shot/melee pass, once more after step 6's queue) — harmless (the sweep is
+  idempotent over `hp<=0` entries) but worth remembering if a later phase
+  profiles per-frame sweep cost.
+- **R2/E11 defuse required NO new ordering code** — it falls out of the
+  existing 7-step contract for free. A Wraith killed mid-FLASH by a bullet
+  (step 3) or melee (step 4) is removed by the ordinary step-5 sweep; step 6's
+  `fireWraithAI` simply never runs for an entity that's already gone from
+  `G.enemies`. Verified concretely (not just structurally, unlike Phase 3's
+  synthetic proof) in `test-enemies-wraith.js`: a lethal player shot sitting on
+  a FLASHing Wraith produces no AoE and no barrel-seam call.
+- **`flashMul` (0.5×, "movement continues" during FLASH) is applied as a
+  temporary scale-then-restore of `e.speed`** around the one `steerNavigator`
+  call in the FLASH branch, rather than adding a multiplier parameter to the
+  shared nav/steer layer (`stepToward`/`steerNavigator` read `e.speed` directly
+  with no per-call override hook, and no other roster member needs one yet).
+  `e.speed` is restored to its baked EFFECTIVE value immediately after the call
+  so nothing outside this one branch ever observes the scaled-down number.
+- **Barrel-detonation seam**: `registerBarrelDetonation(fn)` in `enemies.js`,
+  default no-op — mirrors the loader's `registerBlockerSink` pattern exactly
+  (SPEC-ENEMIES §7's own prescribed shape). Barrels don't exist yet
+  (SPEC-BARRELS, post-#4); `explodeFireWraith` calls it unconditionally with
+  `(x, y, explodeRadius_px, "wraith-aoe")`.
+- **Crate immunity is by omission, not a guard** — `explodeFireWraith` never
+  reads `G.crates` at all, so "crates are immune to the Wraith's blast"
+  (§13.16) requires no explicit skip-crates branch; there's simply no code
+  path that could touch one.
+- **Light-emitter seam (§8.4, self-glow) — first occupant of `G.lights`.**
+  `G.lights` existed since the Phase-3 (SPEC-LEVEL) loader's transient-clear as
+  a reserved-but-unused array; no shape convention existed yet, so this phase
+  defines the minimal one: `{ source: e, radius: glowRadius × TILE }`. `source`
+  is a live entity reference (not a copied `x,y`) so a future renderer (#7)
+  reads the Wraith's current position every frame with no re-sync needed — an
+  interpretation choice (not spec-given, GDD §8.4 only says "self-glows,
+  constant"), flagged here for a sign-off glance when #7 lands. `deathSweep`'s
+  new `removeLight(e)` (a plain `findIndex(l => l.source === e)` splice) is
+  generic — it's a no-op for any type that never registered a light, so it
+  costs nothing for the other 6 roster members and pre-handles the Reaper if
+  it ever gets a light later.
+- **Test seam note:** `test-enemies-wraith.js` (16 checks) drives the REAL
+  `tickEnemies` spine end-to-end (not per-step `__`-prefixed calls) since the
+  EXPLODE behavior spans steps 5/6/7 together. Covers: factory shape + light
+  registration; the concrete R2 defuse (bullet kills a FLASHing Wraith → no
+  AoE, no barrel call, no player damage); the concrete EXPLODE (4 dmg to
+  player, friendly-fire kill on a bystander scored 0 but still drops gems, a
+  crate in radius left intact, barrel seam called with the right radius/cause,
+  light emitter removed on death); the natural FSM transition
+  `APPROACH→FLASH` via the real GROUND A* layer (not a synthetic state
+  assignment); and a dirty-repath re-route parity check mirroring the Zombie's
+  existing test.
 
 ## Known open items (non-blocking for build)
 

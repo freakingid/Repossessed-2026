@@ -464,6 +464,55 @@ export function updateZombie(e, player, dt) {
   steerNavigator(e, player, dt);
 }
 
+/* ---- Fire Wraith: GROUND A*, FSM APPROACH -> FLASH (§6.1.8) ------------- *
+   APPROACH: full GROUND A* toward the player, same registration/steer path as
+   the Zombie. Within armDist it moves to FLASH (an accelerating-strobe visual
+   state only — no behavior change here beyond continuing to steer at
+   flashMul, §6.1.8's "movement continues"). EXPLODE itself is NOT decided
+   here: this updater only advances the FLASH timer and flags e.wraith.explode
+   = true the frame the timer completes (R2/E11 — the actual detonation, AoE,
+   and death must happen from enemies.js's step-6 AI tick AFTER the step-5
+   death sweep has already run for this frame, so a Wraith shot down before
+   its FLASH completes never reaches this flag). enemies.js reads the flag and
+   performs the explosion; this layer stays combat-agnostic (R6 — never
+   imports player-sinks/projectiles). */
+function initWraithState(e) {
+  const s = e.wraith || (e.wraith = {});
+  if (s.state === undefined) {
+    s.state = "approach";   // "approach" | "flash"
+    s.flashT = 0;
+    s.explode = false;
+  }
+  return s;
+}
+
+export function updateFireWraith(e, player, dt) {
+  const cfg = CFG.ENEMY.fireWraith;
+  const s = initWraithState(e);
+  if (!recByEntity.has(e)) addNavigator(e, NAV_MASK.GROUND, groundMover);
+
+  if (s.state === "flash") {
+    s.flashT -= dt;
+    // "movement continues" at flashMul (§6.1.8) — e.speed is the baked EFFECTIVE
+    // px/s (E10); scale it for this one steer call only, then restore, so the
+    // shared nav layer never needs its own multiplier hook.
+    const baseSpeed = e.speed;
+    e.speed = baseSpeed * cfg.flashMul;
+    steerNavigator(e, player, dt);
+    e.speed = baseSpeed;
+    if (s.flashT <= 0) s.explode = true;  // flagged for enemies.js's step-6 AI tick
+    return;
+  }
+
+  // APPROACH — full GROUND A* at the base speedMul (e.speed already bakes it).
+  const dist = Math.hypot(player.x - e.x, player.y - e.y);
+  if (dist <= cfg.armDist * CFG.TILE) {
+    s.state = "flash";
+    s.flashT = cfg.flashDur;
+  }
+  steerNavigator(e, player, dt);
+}
+
 /* ---- Skeleton Shooter: GROUND A*, FSM WANDER -> HUNT (§6.1.3) ----------- *
    WANDER (unaware): slow ambient roam toward an occasionally-picked random
    reachable waypoint (registered as a GROUND navigator so it rides the same
