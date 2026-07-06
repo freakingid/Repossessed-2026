@@ -1,6 +1,38 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-06 (SPEC-PICKUPS Phase 2 — **new leaf module
+**Last updated:** 2026-07-06 (SPEC-PICKUPS Phase 3 — **`updatePickups(dt)`
+built + tested headlessly in `src/pickups.js`: the Magnet-pull → gem-age/
+despawn → contact-collection ordered pass (§4), a single reverse-iterating
+splice over `G.pickups` for the age/contact step (R3 — pull always runs
+first, in its own separate forward pass, since it only moves gems and never
+splices).** New sink imports: `G` (state.js), `emit` (level-loader.js),
+`addGemEnergy` (abilities.js), `healPlayer` (player.js) — pickups.js remains
+a DAG leaf (nothing imports it back). Collect routing per D3/R5: gem →
+`addGemEnergy(value)`; food → `healPlayer(heal)` (sink owns the
+`overhealCap` clamp); treasure → `G.score += points`; key → `G.keys++`;
+`powerup` branches on `power` **before** the +75 grant (R5) — `magnet` sets
+`G.magnet += CFG.PICKUP.magnet.duration` (additive refresh, D8) and leaves
+`G.powerups.magnet` untouched; any other `power` does
+`G.powerups[power] = (G.powerups[power]||0) + CFG.PICKUP.powerupShots`. Gem
+`life` is lazy-seeded (`if (g.life == null) g.life = 0`) per R2 —
+`dropGems` stays untouched. Contact test mirrors `firstOverlappingCrate`
+(squared distance, `p.r + CFG.PICKUP.grab*CFG.TILE`); **no `p.loco` gate**
+anywhere (D9 — collects while CARRYING/STUNNED). Exactly one
+`pickup:collected` emit per collect (snapshot payload incl. `amount`); a
+despawn emits nothing. Extended `test-pickups.js` (14→35 asserts) +new
+`test-pickups-magnet.js` (9 asserts): contact routing per type, food overheal
+clamp (28+10→30 not 38), magnet-kind D4 isolation, additive magnet refresh,
+gem despawn (silent, credits nothing) vs. collect-before-despawn, the
+despawn-vs-contact same-frame boundary (despawn wins — the per-item pass
+checks age before contact, so a gem crossing the threshold this frame is
+spliced silently even if in grab range, never double-handled), magnet pull
+radius/no-overshoot/gems-only/tick-down-floors-at-0, and pull-then-collect
+same-frame. Full suite reran green, **1025 total** (was 981, purely
+additive). **Still owed (integration phase, unchanged from Phase 2): no
+boot `import "./pickups.js"` wiring, and `updatePickups(dt)` is not yet
+called from the main loop** — same deferred-integration debt already
+carried for `abilities.js`/`barrels.js`.)
+(SPEC-PICKUPS Phase 2 — **new leaf module
 `src/pickups.js` created: the three factory-decoration wraps only, no
 `updatePickups` yet.** Mirrors the shipped `makeSpawner` (enemies.js) /
 `makeBarrel` (barrels.js) wrap-and-override precedent: captures each base
