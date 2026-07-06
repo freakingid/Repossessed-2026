@@ -1,6 +1,57 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-06 (SPEC-ABILITIES Phase 3 — **Lightning cast built**
+**Last updated:** 2026-07-06 (SPEC-ABILITIES Phase 4 — **Nova cast + ring pass
+built; subsystem #5 COMPLETE.** `abilities.js` `onNova` (§4.1) + the per-frame
+Nova ring pass in `updateAbilities` (§4.2) filled, replacing the Phase-2 TODO.
+**`onNova`:** (1) cooldown gate (`return` if `novaCd>0`); (2) fuel branch (A5) —
+`storedCharges≥1` → spend one charge, `health = ringMaxHp`(50), live bar
+untouched; else `gemEnergy ≥ minBarToFire`(25) → `health = ringMaxHp ×
+gemEnergy/barCap` (kept a **float**, no round), `gemEnergy = 0`; else a **rejected
+no-op** (no ring, NO cooldown, NO spend); (3) push a ring (§2.2) at the player's
+**frozen** centre with `r=prevR=0`, the resolved float `health`, an empty `hit`
+Set, `kills=0`; (4) `novaCd = cooldown`(0.5). **No emit at cast** (Nova's total is
+only known at dissipation). **Ring pass (`updateAbilities`, reverse-iterate
+`G.novas` so removals don't skip):** per ring — `prevR=r`; `r += expandTilesPerSec
+× TILE × dt` (=384 px/s); **ENEMY PASS** gathers `prevR < dist ≤ r` (centre-to-
+centre, **no `e.r`** term — unlike Lightning's edge test) and not in `hit`, sorts
+**ascending by dist** (A4 nearest-first), then per enemy adds to `hit` and either
+`resist.nova` → `e.hp -= reaperDamage`(10)/`health -= reaperRingCost`(20)/survives,
+or destroy → `cost = e.hp`, `e.hp = 0`, `e._cause = "player-nova"`, `kills++`,
+`health -= cost`; **break AFTER the fatal victim is marked dead** once `health ≤ 0`
+(A4 — enemies farther out this frame are neither struck nor added to `hit`, and the
+ring dissipates on the same ≤0 threshold, so they are never missed on a later
+frame); **PROJECTILE ERASE (A10, free, same band, health-independent so it runs on
+the dying frame)** removes `G.shots` with `owner==="enemy"` + all `G.ebolts` (at
+their current interpolated `b.x,b.y`) in `prevR<dist≤r`, **player shots KEPT**;
+**DISSIPATE** at `health ≤ 0` OR `r ≥ radiusCapTiles × TILE`(448) →
+`emit("ability:cast",{kind:"nova",killCount:ring.kills})` (OQ-A1 snapshot,
+`killCount`=**destroys only**, resisted not counted) then splice the ring. After
+ALL rings: **`sweepDeadEnemies()` once** (A1 — never per-hit; the shared
+drop/score/emit/nav/light path; `player-nova` scores full points). `updateAbilities`
+early-returns when `G.novas` is empty (still lazy-inits it) so the unconditional
+per-frame sweep never touches non-Nova deaths. **Immunity by OMISSION** — the Nova
+pass NEVER references `G.spawners`/`G.crates`/`G.barrels`, so spawner/crate/barrel
+immunity (GDD §5.1) holds by construction; the barrel-detonation seam spy is never
+called by Nova. Net-new `export { onNova as __onNova }` (house `__` test
+affordance, mirrors `__onLightning`; player still casts only via `registerAbility`).
+No new imports (graph unchanged; `emit`/`sweepDeadEnemies` were pinned in P2). New
+`test-abilities-nova.js` (54) green — the full §9 Nova clusters: fuel branches
+(charge/bar≥25/<25-no-op), cooldown gate, single-hit-per-ring (`hit` Set survives a
+victim moving into a later band), destroy+ring-health-cost+shared-sweep,
+weak-ring-kills-final-victim, the nearest-first margin (15-health ring kills the two
+nearer 10-HP enemies but not the in-band third), Reaper nova-resist (10 dmg/ring −20/
+survives/uncounted), projectile erase (enemy shots + ebolts removed, player shots
+kept, erase on the dying frame), immunity (spawner/crate untouched, barrel spy never
+called), and the dissipation emit (fires once on death, `killCount`=destroys only,
+not at cast/per-hit). Suite **742 total** (was 688, purely additive). **Subsystem
+#5 (Abilities) is now COMPLETE** — gem economy + Lightning + Nova all built and
+tested headlessly. Still owed downstream (NOT #5 scope): the boot `import
+"./abilities.js"` so `registerAbility`/`registerBarrelDetonation` run before frame 1
++ the wiring of `initAbilities()`/`updateAbilities(dt)` into the main loop
+(integration phase), and **SPEC-BARRELS must register its real detonation fn into
+BOTH `enemies.js` AND `abilities.js`** (Lightning's barrel clause is inert until
+then; Nova never touches barrels).)
+(SPEC-ABILITIES Phase 3 — **Lightning cast built**
 (`abilities.js` `onLightning` body filled; **Nova stays a NO-OP stub**, owed P4).
 Instantaneous per §5.1: (1) cooldown gate (`return` if `lightningCd>0`); (2)
 `R = lightning.radiusTiles × CFG.TILE` (=160), `(px,py) = G.player` centre frozen
@@ -132,8 +183,8 @@ melee knockback can't wedge it on a wall it phases through). `test-enemies-reape
 (24) green; suite **591 total**. Roster still owed: **spawners** only.)
 (SPEC-ENEMIES Phase 7 — **Lobber added** (§6.1.4, cover-seek, ADAPTS ADD `updateSorter`) + the `G.ebolts`/`updateEbolts` arced-ordnance system it is the sole producer of. `updateLobber` (`enemies-ai.js`) is **NOT an A\* navigator** — cover-seek via `moveBody`+`groundBlockerFilter` only, no `addNavigator`/`steerNavigator`, throttled LOS (`losCheckEvery` 0.12s, ADD). Exposed (`canSee`): panic-flee AWAY at `fleeMul(0.95×)` with an ADD-verbatim wandering-jitter angle, hold fire. In cover (`!canSee`): advance at `0.40×`, lob every `lobEvery(2.5s)` within `lobRange(9t)`. The lob is minted via a registered `registerLobberFire` seam (same register-callback shape as the Spider web/Shooter arrow, R6 — `enemies-ai.js` never imports `G.ebolts`) filled in `enemies.js`: pushes a `kind:"arc"` entry into `G.ebolts` (NOT a `Shot`/`G.shots` — E1) with `owner:"enemy"`, landing at the player's fire-time position **perturbed by a uniform-disc random offset within `G.ramp.lobberErrorRadius`** (net-new vs ADD's exact-target `fireEnemyArc` — sampled via `angle=rand·2π, radius=√rand·errR` for uniform area coverage, not center-biased). `updateEbolts` (`enemies.js`, replacing the Phase-3 no-op hook in step 7) is ADD `updateArc` ported near-verbatim: interpolates ground pos launch→landing over `dur(airtime 1.0s)`, parabolic `height` for the renderer, wall-agnostic in flight (never collides in transit); at `t≥dur` splats + AoE-tests the player ONLY at `blast(1.25t)+player.r` → `applyDamageToPlayer(2,"enemy-lob")` + the registered `detonateBarrelsInRadius` seam, then removes the entry. Self-contained in step 7 (not moved by `player.js`'s `updateShots` — arced ordnance is a distinct timed kind from a `Shot`, E1), so no cross-file frame-ordering assumption applies to it, unlike the straight-shot passes. `test-enemies-lobber.js` (15) green; suite **567 total**. Roster still owed: the Reaper and spawners.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
-incl. crates §7.1), #3 (Pathfinding), and #4 (Enemies + spawners) are BUILT and
-tested headlessly.**
+incl. crates §7.1), #3 (Pathfinding), #4 (Enemies + spawners), and #5 (Abilities
+— gem economy + Nova + Lightning) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
 the A\* solver (`findPath`, Phase 2). Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -314,7 +365,8 @@ current or the next session starts blind.
   `enemy:killed`+calls `markNavDirty` on the vacated tile. Barrel/shrapnel
   destruction of spawners stays out of scope (SPEC-BARRELS). Tests:
   `test-enemies-spawner.js` (28, green).
-- [ ] §5 Abilities — Nova, Lightning, gem economy. **Phase 1 (enabling edits)
+- [x] §5 Abilities — **BUILT (subsystem #5 COMPLETE).** Nova, Lightning, gem
+  economy all done. **Phase 1 (enabling edits)
   done** — the four surgical ENABLING seams from SPEC-ABILITIES §1/§2.3 landed
   (no `abilities.js` yet): (1) `config.js` gained the `CFG.ABILITY` block (§2.3 —
   `nova{}` 10 dials + `lightning{}` 4 dials, data-only, leaf preserved); (2)
@@ -348,9 +400,29 @@ current or the next session starts blind.
   still a NO-OP stub (owed P4). Net-new `export { onLightning as __onLightning }`
   test affordance (house `__` convention; player still casts only via the
   `registerAbility` registry). Tests: `test-abilities-lightning.js` (22, green).
-  Owed by the build pass: Nova cast body + Nova ring pass in `updateAbilities`
-  (P4), the SPEC-BARRELS fill of `registerBarrelDetonation`, and the boot
-  `import "./abilities.js"` so `registerAbility` runs before frame 1.
+  **Phase 4 (Nova cast + ring pass) done — subsystem #5 COMPLETE** —
+  `abilities.js` `onNova` (§4.1) filled: cooldown gate → fuel branch (A5:
+  charge → `health=ringMaxHp`(50)/bar untouched; else `gemEnergy≥minBarToFire`
+  (25) → `health=ringMaxHp×gemEnergy/barCap` **float**/`gemEnergy=0`; else
+  rejected no-op — no ring/cooldown/spend) → push a ring (frozen player centre,
+  `r=prevR=0`, empty `hit` Set, `kills=0`) → `novaCd=cooldown`(0.5); **no emit at
+  cast**. The Nova ring pass in `updateAbilities` (§4.2) replaces the Phase-2
+  TODO: reverse-iterate `G.novas`; per ring `prevR=r`, `r+=384px·dt`; enemy pass
+  over the **swept band** `prevR<dist≤r` (centre-to-centre, **no `e.r`** — the
+  A3 geometry differs from Lightning's edge test), nearest-first (A4),
+  `resist.nova`→10 dmg/ring −20/survives else destroy (`hp=0`,`_cause=
+  "player-nova"`,`kills++`,ring −victim-HP), **break after the fatal victim once
+  `health≤0`**; free projectile erase (A10 — enemy shots + all ebolts in-band,
+  player shots kept, runs on the dying frame); dissipate at `health≤0` OR
+  `r≥radiusCap`(448) → `emit("ability:cast",{kind:"nova",killCount:ring.kills})`
+  (destroys only). One `sweepDeadEnemies()` after all rings (A1). Immunity by
+  OMISSION (never references `G.spawners`/`G.crates`/`G.barrels`). Net-new
+  `export { onNova as __onNova }`. Tests: `test-abilities-nova.js` (54, green).
+  Still owed downstream (NOT #5 scope): SPEC-BARRELS fill of
+  `registerBarrelDetonation` into **BOTH** `enemies.js` **and** `abilities.js`;
+  the boot `import "./abilities.js"` so `registerAbility`/`registerBarrelDetonation`
+  run before frame 1; and wiring `initAbilities()`/`updateAbilities(dt)` into the
+  main loop (integration phase).
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
 - [ ] §9/§10/§11 Scoring, HUD, render/lighting, audio
@@ -408,19 +480,22 @@ imported back [R6]). `level-loader.js` gained `getEntityFactory(type)` (Phase
 9) — a read-back accessor so a later subsystem's factory can DECORATE the
 current registration instead of re-deriving its logic (used by `makeSpawner`
 to reuse the placeholder's eligibility-filtered `table`/ramped
-`interval`/`liveCap` computation). `abilities.js` (**new — SPEC-ABILITIES
-Phase 2**: `addGemEnergy` gem economy [A6/§3], module-local `novaCd`/
-`lightningCd` + `updateAbilities(dt)` cooldown tick [Phase-4 Nova ring pass
-TODO], `initAbilities`, read-only `getCooldowns()`, the A8
-`registerBarrelDetonation` no-op seam; `onLightning` FILLED [Phase 3 — §5.1
-instantaneous radius wipe: cooldown gate → `resist?.lightning`-marker branch →
-`sweepDeadEnemies()` once → barrel seam → `applyStun(3)` → `lightningCd=10` →
-`ability:cast` snapshot emit, `killCount`=destroys only; costs no gem energy],
-`onNova` still a NO-OP stub [Phase-4 owed]; both registered at load via
-`registerAbility` + `onLightning` also exported as `__onLightning` for headless
-tests; imports config/state + one-way
-`emit`/`registerAbility`+`applyStun`/`sweepDeadEnemies`, never imported back).
-Tests:
+`interval`/`liveCap` computation). `abilities.js` (**SPEC-ABILITIES #5,
+COMPLETE**: `addGemEnergy` gem economy [A6/§3], module-local `novaCd`/
+`lightningCd` + `updateAbilities(dt)` [cooldown tick + the **Nova ring pass**,
+§4.2 — swept-band enemy hits/A3/A4/A2, free projectile erase/A10, dissipation
+emit, one `sweepDeadEnemies()`; reverse-iterates `G.novas`], `initAbilities`,
+read-only `getCooldowns()`, the A8 `registerBarrelDetonation` no-op seam;
+`onLightning` FILLED [§5.1 instantaneous radius wipe: cooldown gate →
+`resist?.lightning`-marker branch → `sweepDeadEnemies()` once → barrel seam →
+`applyStun(3)` → `lightningCd=10` → `ability:cast` snapshot emit,
+`killCount`=destroys only; costs no gem energy]; `onNova` FILLED [§4.1: cooldown
+gate → fuel branch A5 → push ring at frozen player centre → `novaCd=cooldown`; no
+emit at cast]; both registered at load via `registerAbility` + both exported as
+`__onNova`/`__onLightning` for headless tests; Nova immunity is by OMISSION
+[never references `G.spawners`/`G.crates`/`G.barrels`]; imports config/state +
+one-way `emit`/`registerAbility`+`applyStun`/`sweepDeadEnemies`, never imported
+back). Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
 `test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
@@ -430,12 +505,13 @@ Tests:
 `test-enemies-wraith.js` (16), `test-enemies-lobber.js` (15),
 `test-enemies-reaper.js` (24), `test-enemies-spawner.js` (28),
 `test-abilities-seams.js` (29), `test-abilities.js` (18),
-`test-abilities-lightning.js` (22) —
-all green (**688 checks total**). Subsystems #1, #2, #3, and #4 (Enemies +
-spawners) are all COMPLETE: nav consumer layer, combat spine, all 9 roster
-types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire
-Wraith/Lobber/Reaper), and spawners (emission + spawner-as-target) built and
-tested headlessly.
+`test-abilities-lightning.js` (22), `test-abilities-nova.js` (54) —
+all green (**742 checks total**). Subsystems #1, #2, #3, #4 (Enemies +
+spawners), and #5 (Abilities) are all COMPLETE: nav consumer layer, combat
+spine, all 9 roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton
+Shooter/Fire Wraith/Lobber/Reaper), spawners (emission + spawner-as-target),
+and the gem economy + Nova + Lightning abilities — all built and tested
+headlessly.
 
 ## Implementation sequencing (agreed order)
 
@@ -1393,6 +1469,98 @@ persistent entity). Nova stays a no-op stub (owed P4). Decisions:
   `(px,py,5×TILE,"player-lightning")`, `ability:cast` emits once with
   `killCount`=destroys-only) plus a cooldown-gate no-op/re-fire cluster. Real-
   module import, emit + barrel spies, defensive browser stubs. Suite 666 → 688.
+
+### 2026-07-06 — SPEC-ABILITIES Phase 4 (`onNova` + the Nova ring pass) — subsystem #5 COMPLETE
+Filled `abilities.js` `onNova` (§4.1) and the per-frame Nova ring pass inside
+`updateAbilities` (§4.2), replacing the Phase-2 TODO. This completes #5 (gem
+economy + Lightning + Nova). Load-bearing decisions and the flagged risks, all
+resolved as the phase prompt prescribed:
+- **A5 fuel branch — charge-first (OQ-A2), bar-second, else rejected no-op.**
+  `storedCharges≥1` → `storedCharges--`, `health=ringMaxHp`(50), the live bar is
+  **untouched** and keeps filling (banks fuel efficiency); else
+  `gemEnergy≥minBarToFire`(25) → `health = ringMaxHp × gemEnergy/barCap`,
+  `gemEnergy=0`; else **nothing happens** — no ring pushed, `novaCd` NOT armed, no
+  spend. A cast blocked by `novaCd>0` returns before the fuel branch (no spend).
+- **Ring health stays a FLOAT.** Bar-fire scaling is fractional (e.g. bar 25 →
+  12.5, bar 30 → 15.0); never rounded — it only ever feeds the `≤0` comparison.
+  Verified by the weak-ring (12.5 kills a 20-HP victim) and margin (15.0 → 5 → −5)
+  tests.
+- **A3 swept-band geometry, centre-to-centre, NO `e.r`.** The Nova hit test is
+  `prevR < dist ≤ r` with `dist` centre-to-centre — deliberately **unlike**
+  Lightning's `≤ R+e.r` edge test (A2/§5.1). `prevR` is initialised to **0** on a
+  fresh ring (NOT `r`), so frame 1's band `(0, firstStep]` is non-empty and an
+  enemy at `dist<firstStep` is not missed — the STATUS-flagged Opus-tier subtlety.
+  `r += expandTilesPerSec×TILE×dt` (=384 px/s); `r` is monotonic so consecutive
+  bands are contiguous and non-overlapping (`prevR_{k+1}=r_k`).
+- **A4 nearest-first + break-after-the-fatal-victim.** This frame's crossings are
+  gathered, sorted **ascending by dist**, then applied in order; the `health≤0`
+  break happens **AFTER** the victim that drove it to ≤0 is marked dead (so a weak
+  ring still kills its final victim). Enemies farther out this frame are **not**
+  struck and **not** added to `hit` — but because the same `≤0` threshold also
+  triggers dissipation on this frame, the ring is removed before a later frame
+  could re-band them, so they are never silently missed. The margin test (15-health
+  ring vs three in-band 10-HP enemies: kills the two nearer, leaves the third
+  untouched, `killCount=2`) pins this.
+- **A3 one-hit-per-ring via the `hit` Set.** Each struck enemy (destroyed OR
+  resisted-and-surviving) is added to `ring.hit`; a resisted enemy that later moves
+  into a subsequent frame's band is **not** struck again. Tested directly (a
+  resisted Reaper chipped once, then relocated into the next band, takes no second
+  hit).
+- **A2 resist marker.** `e.resist?.nova` → `e.hp -= reaperDamage`(10),
+  `ring.health -= reaperRingCost`(20), survives, **uncounted**; else destroy
+  (`cost=e.hp`, `e.hp=0`, `e._cause="player-nova"`, `ring.kills++`,
+  `ring.health -= cost`). Same value-free E9 marker Lightning reads.
+- **A10 projectile erase is FREE and health-independent.** Same `prevR<dist≤r`
+  band, no health cost, and it runs **before** the dissipate check so it still
+  fires on the frame the ring dies. Removes `G.shots` with `owner==="enemy"` +
+  **all** `G.ebolts` (tested at their current interpolated `b.x,b.y`); player shots
+  are **never** touched. Erase is independent of the enemy pass (a dying ring still
+  clears the screen it swept — the panic-button feel).
+- **A1 sweep-after-all-rings, once.** The ring loop only sets `hp`/`_cause`; a
+  single `sweepDeadEnemies()` runs after **all** rings are processed (never
+  per-hit — that would splice `G.enemies` mid-iteration). `updateAbilities`
+  **early-returns when `G.novas` is empty** (after the lazy-init) so this
+  unconditional-looking sweep runs only on frames with live rings and never
+  touches non-Nova deaths owned by `tickEnemies`. The ability step is thus
+  order-tolerant (A1) — it does not depend on a later `tickEnemies` sweep.
+- **Reverse-iterate `G.novas`.** Rings are both mutated and spliced in the same
+  loop, so iteration is `for (let ri = rings.length-1; ri>=0; ri--)` — removals
+  don't skip entries. Multiple rings coexist (rapid taps 0.5 s apart), each with
+  its own `hit`/`health`/`kills`.
+- **OQ-A1 emit contract (Nova half).** `emit("ability:cast",{kind:"nova",
+  killCount})` fires **once, on dissipation** (health≤0 OR `r≥radiusCapTiles×TILE`
+  =448) — NOT at cast, NOT per hit — with `killCount = ring.kills` (**destroys
+  only**; a resisted Reaper chipped over the ring's life is excluded). This
+  completes the OQ-A1 pair: **Lightning emits at cast, Nova emits on dissipation**,
+  both a one-way snapshot payload (subscribers must not reach back into G). The
+  #7 white-flash / #12.4 NOVACLEAR!/THUNDERSTRUCK! consumers build against it later.
+- **Immunity by OMISSION.** The Nova pass **never references**
+  `G.spawners`/`G.crates`/`G.barrels`, so their §5.1 immunity holds by
+  construction (not a special-cased skip); the barrel-detonation seam spy is never
+  called by Nova (asserted). Nova deliberately does not touch barrels (GDD §5.1) —
+  only Lightning calls `detonateBarrelsInRadius`.
+- **Cross-file seams recap (A1/A7/A9 — the three edits outside #5, all landed in
+  Phase 1 and consumed now):** A1 = `enemies.js` exports `deathSweep` as
+  `sweepDeadEnemies` (both abilities route AoE kills through it); A7 = `player.js`
+  `applyStun(seconds)` (Lightning's self-stun producer); A9 = `level-loader.js`
+  clears `G.novas` in the transient-clear line (Nova rings are a per-level
+  transient; `abilities.js` also lazy-inits `G.novas ||= []`). `gemEnergy`/
+  `storedCharges` persist across Nights; cooldowns reset via `initAbilities()`.
+- **STILL OWED downstream (NOT #5 scope):** **SPEC-BARRELS must register its real
+  detonation fn into BOTH `enemies.js` AND `abilities.js`** — two separate
+  `registerBarrelDetonation` consumers, each with its own no-op default; Lightning's
+  barrel clause is wired-but-inert until then (Nova never touches barrels). Also
+  owed: the boot `import "./abilities.js"` (so `registerAbility` +
+  `registerBarrelDetonation` run before frame 1) and wiring
+  `initAbilities()`/`updateAbilities(dt)` into the main loop (integration phase).
+- **NET-NEW test affordance: `export { onNova as __onNova }`** (mirrors
+  `__onLightning`; player still casts only via the `registerAbility` registry).
+- **Test:** `test-abilities-nova.js` (54 checks) — the full §9 Nova clusters
+  (fuel branches, cooldown gate, single-hit-per-ring, destroy+ring-cost+shared
+  sweep, weak-ring-kills-final-victim, nearest-first margin, Reaper resist,
+  projectile erase incl. the dying-frame case, immunity, and the dissipation
+  emit). Real-module import, emit + barrel spies, defensive browser stubs. Suite
+  688 → **742**, purely additive (no existing test touched).
 
 ## Known open items (non-blocking for build)
 

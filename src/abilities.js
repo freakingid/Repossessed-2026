@@ -1,14 +1,16 @@
 /* =========================================================================
    abilities.js — Nova, Lightning & the gem-energy economy (SPEC-ABILITIES,
-   subsystem #5). THIS FILE, PHASE 2: the FOUNDATION only.
+   subsystem #5). COMPLETE (Phases 1–4).
 
    Built here: the gem-energy accounting (addGemEnergy, A6/§3), the cooldown
    timers (novaCd/lightningCd) + their per-frame tick (updateAbilities), the
    init/reset (initAbilities), the barrel-detonation seam (A8), and the
    registration of the two ability handlers into player.js's registerAbility
-   seam. onNova/onLightning are NO-OP STUBS this phase — Nova ring behaviour
-   (Phase 4) and Lightning cast (Phase 3) fill their bodies later; the
-   registration is by reference, so it stays correct as the bodies grow.
+   seam. onLightning (§5.1, instantaneous radius wipe) and onNova (§4.1, the
+   expanding-ring cast) are both FILLED, and updateAbilities runs the per-frame
+   Nova ring pass (§4.2: expand → swept-wavefront enemy hits → projectile erase
+   → dissipate → one shared sweepDeadEnemies). Registration is by reference, so
+   the registered handler identity is stable across the filled bodies.
 
    ---- R6 / import direction: ONE-WAY, no cycle ---------------------------
    abilities.js imports config/state and, one-way, level-loader (emit),
@@ -86,25 +88,145 @@ export function getCooldowns() {
 }
 
 /* ---- Per-frame step (§4.2) ----------------------------------------------
-   PHASE 2: ticks both cooldowns down by dt, floored at 0. The Nova ring pass
-   (expand → enemy hits → projectile erase → dissipate → sweepDeadEnemies)
-   lands in Phase 4 at the marked TODO. */
+   Ticks both cooldowns down by dt (floored at 0), then runs the Nova ring
+   pass. For each live ring, in REVERSE (removals must not skip entries — the
+   §8 risk): advance the swept band [prevR, r], strike the enemies crossed this
+   frame (nearest-first, one hit per enemy per ring), erase enemy ordnance in
+   the band (free), and dissipate the ring at health≤0 or the radius cap. One
+   shared sweepDeadEnemies() runs after ALL rings (A1 — never per-hit, which
+   would splice mid-iteration; the ability step is order-tolerant per A1).
+
+   Barrels/crates/spawners are NEVER referenced below — that is how Nova's
+   "unaffected" immunity (GDD §5.1) holds by construction, not a special skip. */
 export function updateAbilities(dt) {
   novaCd = Math.max(0, novaCd - dt);
   lightningCd = Math.max(0, lightningCd - dt);
 
-  G.novas ||= [];      // lazy-init: first touch of the ring array (A9)
-  // Phase 4: Nova ring pass — for each ring in G.novas: prevR=r; r+=expand·dt;
-  // enemy swept-wavefront hits (A3/A4/A2/A1); projectile erase (A10); dissipate
-  // at health<=0 or r>=radiusCap (emit ability:cast); then sweepDeadEnemies() once.
+  const rings = (G.novas ||= []);   // lazy-init: first touch of the ring array (A9)
+  if (rings.length === 0) return;   // no live rings → no ring pass, nothing to sweep
+
+  const nova = CFG.ABILITY.nova;
+  const expand = nova.expandTilesPerSec * CFG.TILE;   // px/s
+  const radiusCap = nova.radiusCapTiles * CFG.TILE;   // px hard stop (A5/§2.2)
+  const enemies = G.enemies || [];
+  const shots = G.shots || [];
+  const ebolts = G.ebolts || [];
+
+  for (let ri = rings.length - 1; ri >= 0; ri--) {
+    const ring = rings[ri];
+    ring.prevR = ring.r;                 // last frame's radius = band lower bound (A3)
+    ring.r += expand * dt;               // rings expand outward only; r is monotonic
+    const lo = ring.prevR, hi = ring.r;  // swept band this frame: lo < dist <= hi
+
+    // 2. ENEMY PASS (A3/A4/A2/A1). Gather this frame's crossings (centre-to-
+    //    centre dist, NOT edge — Nova's hit geometry has no e.r term, unlike
+    //    Lightning), excluding already-struck enemies; resolve nearest-first.
+    const crossed = [];
+    for (const e of enemies) {
+      if (ring.hit.has(e)) continue;                       // one hit per enemy per ring
+      const dx = e.x - ring.x, dy = e.y - ring.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > lo && dist <= hi) crossed.push({ e, dist });
+    }
+    crossed.sort((a, b) => a.dist - b.dist);               // nearest-first (A4)
+    for (const { e } of crossed) {
+      ring.hit.add(e);
+      if (e.resist?.nova) {
+        e.hp -= nova.reaperDamage;        // resisted → chip 10, survives (A2)
+        ring.health -= nova.reaperRingCost;  // ring loses 20
+      } else {
+        const cost = e.hp;                // ring loses the victim's CURRENT hp
+        e.hp = 0;
+        e._cause = "player-nova";         // player-attributed (§6)
+        ring.kills++;                     // destroys only (the dissipation emit)
+        ring.health -= cost;
+      }
+      // A4: the victim that drove health ≤0 stays destroyed (marked above); we
+      // stop here — enemies further out this frame are neither struck nor added
+      // to hit, and the ring dissipates below (same ≤0 threshold).
+      if (ring.health <= 0) break;
+    }
+
+    // 3. PROJECTILE ERASE (A10) — FREE (no health cost), same swept band,
+    //    independent of ring health so it still runs on the dying frame. Removes
+    //    enemy-owned shots (arrows/webs/dark-blasts) + all ebolts (arced lobs, at
+    //    their current interpolated ground pos). Player shots are NEVER touched.
+    for (let i = shots.length - 1; i >= 0; i--) {
+      const s = shots[i];
+      if (s.owner !== "enemy") continue;
+      const dx = s.x - ring.x, dy = s.y - ring.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > lo && dist <= hi) shots.splice(i, 1);
+    }
+    for (let i = ebolts.length - 1; i >= 0; i--) {
+      const b = ebolts[i];
+      const dx = b.x - ring.x, dy = b.y - ring.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > lo && dist <= hi) ebolts.splice(i, 1);
+    }
+
+    // 4. DISSIPATE — at health≤0 (spent) OR r≥radiusCap (empty hard stop). Emit
+    //    the OQ-A1 snapshot (killCount = destroys accumulated over the ring's
+    //    life), then remove the ring (after this frame's hits + erases applied).
+    if (ring.health <= 0 || ring.r >= radiusCap) {
+      emit("ability:cast", { kind: "nova", killCount: ring.kills });
+      rings.splice(ri, 1);
+    }
+  }
+
+  // 5. ONE shared sweep after ALL rings (A1) — every ring-killed enemy drops
+  //    gems, scores (player-nova ⇒ full points), and emits through the same path.
+  sweepDeadEnemies();
 }
 
 /* ---- Ability handlers (registered at module load, §7) --------------------
-   onNova (Phase 4) is a NO-OP STUB this phase. onLightning (Phase 3, below) is
-   FILLED. The registration is by REFERENCE, so filling a body needs no
-   re-registration. player.js edge-triggers them on the rising input edge and
-   only when not STUNNED (its tryAbilities gate). */
-function onNova() {}
+   onNova and onLightning are both FILLED; registration is by REFERENCE, so the
+   handler identity is stable. player.js edge-triggers them on the rising input
+   edge and only when not STUNNED (its tryAbilities gate). */
+
+/* ---- Nova cast (§4.1, A5) — pushes an expanding ring; no emit at cast -----
+   The ring's origin is FROZEN at the player's centre at cast (it does not track
+   the player — "aimable by positioning", GDD §5.3). Its per-frame expansion +
+   hits live in updateAbilities (§4.2); the ability:cast emit fires on
+   dissipation, when the ring's total kill count is finally known (not here).
+
+   Order (SPEC §4.1):
+   1. cooldown gate;
+   2. fuel branch (A5): a stored charge is spent FIRST (bank efficiency, OQ-A2)
+      → full ringMaxHp, bar untouched; else a bar ≥ minBarToFire is spent whole
+      → health scales by energy/barCap; else the tap cannot pay → rejected no-op
+      (no ring, NO cooldown, no spend);
+   3. push the ring (r=prevR=0, resolved float health, empty hit Set, kills=0);
+   4. arm the cooldown. */
+function onNova() {
+  if (novaCd > 0) return;                              // 1. cooldown gate
+
+  const nova = CFG.ABILITY.nova;
+
+  // 2. Fuel branch (A5). Keep ring health a FLOAT — the bar-fire scaling is
+  //    fractional (e.g. 40 energy → 20.0) and only ever feeds the ≤0 test.
+  let health;
+  if (G.storedCharges >= 1) {
+    G.storedCharges--;                                 // spend one charge; bar keeps filling
+    health = nova.ringMaxHp;                            // full 50
+  } else if (G.gemEnergy >= nova.minBarToFire) {
+    health = nova.ringMaxHp * (G.gemEnergy / nova.barCap);  // scale by live-bar energy
+    G.gemEnergy = 0;                                    // consume the whole bar
+  } else {
+    return;                                             // rejected no-op (no ring/cooldown/spend)
+  }
+
+  // 3. Push the ring at the player's current centre (frozen origin).
+  (G.novas ||= []).push({
+    x: G.player.x, y: G.player.y,
+    r: 0, prevR: 0,                                     // prevR=0 (NOT r) so frame 1's band isn't empty
+    health,
+    hit: new Set(),
+    kills: 0,
+  });
+
+  novaCd = nova.cooldown;                               // 4. arm anti-double-tap cooldown (0.5s)
+}
 
 /* ---- Lightning cast (§5.1, A2/A7/A8/A1) — INSTANTANEOUS -------------------
    Resolved entirely here; there is no persistent Lightning entity to tick.
@@ -166,4 +288,4 @@ registerAbility("lightning", onLightning);
    tests can drive a cast directly (SPEC §9 — set G state, register a barrel
    spy, call the handler), the same posture as enemies.js's __deathSweep /
    __playerShotEnemyPass. player.js still invokes them only via the registry. */
-export { onLightning as __onLightning };
+export { onNova as __onNova, onLightning as __onLightning };
