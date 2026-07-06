@@ -1,6 +1,64 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-06 (SPEC-BARRELS Phase 2 — **`barrels.js` created**:
+**Last updated:** 2026-07-06 (SPEC-BARRELS Phase 3 — **carry/kick integration
++ roll physics built** (B3/B5/B6, §4). **`player.js`:** `tryPickup` now also
+picks up barrels (a `firstOverlappingBarrel` companion to the crate check —
+**crate-FIRST order preserved**; splice from `G.barrels`, `markNavDirty`,
+`carry={type:"barrel",entity}`, loco CARRYING, `barrel:pickup` emit; NO plate
+press — barrels aren't in the crate plate-weight system); `carryActions`
+**skips `tryWallVault`** for a carried barrel (B6 — barrels never wall-vault);
+`releaseCarry` branches on `carry.type` → new `releaseBarrel`: moving ⇒ **KICK**
+(drop on the player's tile centre, then `barrelKickSink(barrel, aim)` — the
+registered `barrels.js` `kickBarrel`), stationary ⇒ **PLACE** upright static via
+new `placeBarrelAtTile` (crate-toss settle, never rolls, NO vault); **NO
+carried-barrel pushback** — the §7.1.4 crate bumper stays crate-only
+(`isCarryingCrate()` is false for a barrel, so `meleeExchange` runs the normal
+exchange). Net-new exports `carriedBarrel()` (`p.carry?.type==="barrel" ? entity
+: null`) and `notifyCarriedBarrelDestroyed()` (the Phase-4 detonate-in-hand sink:
+clears carry + loco→NORMAL, **does NOT re-insert** — the ONE release path that
+legitimately skips the re-insert). **`dropCarried` (STUN force-drop) now branches
+on `carry.type`** — a barrel force-drop routes to `placeBarrelAtTile` (settles
+STATIC into `G.barrels`), NOT `dropCrateAtTile` (which would misroute the barrel
+into `G.crates` and leak it); this closes the splice-out-symmetry hole the spec's
+phase-risk names — the stun path IS a release path, so handling it is in-scope
+correctness, not new design. **`enemies.js`:** `meleeExchange` now ALSO chips a
+carried barrel 1 HP on enemy contact (B5 — in the `!e.contact` exchange block,
+guarded on `carriedBarrel()`, tagged `"enemy-<type>"`; the player still takes
+normal melee) via the net-new **`registerBarrelDamage` seam** (barrels.js fills
+it with `damageBarrel`); `carriedBarrel` added to the player import. **`barrels.js`:**
+**`kickBarrel(barrel,aimX,aimY)`** (re-insert into `G.barrels` + `vx/vy=aim·
+kick.speed` + `rolling=true`; defensive no-double-insert) and **`updateBarrels(dt)`**
+— the roll integrator, **the SECOND sanctioned `moveBody` exception** after
+`enemies-ai.js`'s `phantomMover` (ADD `dustbin.js slideStep` ported: per-axis
+reflect `v=-v·bounce` off `barrelHitsSolid` = `isWall` ∪ `bodyHitsBlocker(e=>e!==
+self)` [walls + crates + spawners + OTHER barrels], corner reflect-both/hold, then
+`v*=exp(-friction·dt)`; settle `<stopSpeed` → static + tile-align + `markNavDirty`).
+Rolling impact (`speed≥impactSpeed` 96 px/s): an overlapped enemy takes `impactDmg`
+(1), the barrel loses `impactSelfHp` (1) via `damageBarrel(…,"player-kick")` +
+`speed*=(1-impactSlow)` (−40%), and **passes through** (enemies are NOT bounce
+blockers — distinct from the roll blocker set); ONE `sweepDeadEnemies()` after the
+pass. Barrel-vs-barrel = **bounce, no damage** (OQ-B1); the player takes **NO roll
+damage** (never referenced). **Detonation resolution stays a Phase-4 TODO** — a
+kicked/carried barrel CAN reach hp≤0 here (`damageBarrel`) but does NOT yet spawn
+shrapnel/splice. **Circular-import resolution (the phase's key architectural
+call):** `player.js` cannot import `barrels.js` (B1: "nothing imports barrels.js")
+and `enemies.js` cannot either (barrels.js imports enemies.js) — so the kick and
+the melee-chip are **register-callback seams** (`registerBarrelKick` in player.js,
+`registerBarrelDamage` in enemies.js), both filled by `barrels.js` at load, the
+same idiom as `registerBarrelDetonation`/`registerAbility`. `barrels.js` now also
+imports `player.js`'s `registerBarrelKick` (the sanctioned barrels→player edge,
+B1); graph re-verified one-way — nothing imports `barrels.js` back. New
+`test-barrels-carry.js` (61, green): pickup/splice, `carriedBarrel()` +
+`notifyCarriedBarrelDestroyed` no-re-insert, place-static + kick-rolling (BOTH
+re-insert into `G.barrels`), enemy-melee→player damaged AND barrel −1, exp
+decel/one-step-decay, settle + nav-dirty, bounce off wall/crate/spawner/
+other-barrel at 0.6, rolling impact (enemy −1 / barrel −1 / −40% / `player-kick`
+tag), sub-threshold inert, no-player-roll-damage, no-wall-vault. Full suite reran
+green, **887 total** (was 826, purely additive). Owed next: SPEC-BARRELS Phase 4
+(detonation resolution + shrapnel species + chain reactions, B7–B9) —
+`damageBarrel` hp≤0 is still a TODO and `notifyCarriedBarrelDestroyed` awaits its
+detonate-in-hand caller.)
+(SPEC-BARRELS Phase 2 — **`barrels.js` created**:
 entity decoration, the fire ladder, damage intake, and the dual
 detonation-seam fill (B1/B2/B4/B10). **NO roll/kick physics, NO
 detonation/shrapnel resolution yet** — those are Phase 3/4. New `src/barrels.js`
@@ -304,18 +362,23 @@ current or the next session starts blind.
 - [ ] §7 Interactive objects — **crates (§7.1) BUILT** (carry physics in `player.js`,
   crate-always ricochet in `projectiles.js`); **barrels (§7.2), shrapnel — SPEC-BARRELS
   Phase 1 (enabling edits) + Phase 2 (`barrels.js` entity/ladder/damage-intake/seam-fill)
-  done:** `CFG.BARREL` block in `config.js` (§2.3); `enemies.js` exports
-  `sweepDeadSpawners` alias (B9) + the Wraith/Lobber `detonateBarrelsInRadius` call
-  sites pass a 5th `damage` arg (B10). New `src/barrels.js` (Phase 2): decorates the
-  loader's `barrel` placeholder (`hp`/`r`/`vx`/`vy`/`rolling`/`_cause` + a `G.lights`
-  emitter); `fireStateOf`/`lightRadiusOf` (pure fns of hp, §2.5); `damageBarrel`
-  (§3.1, the single intake sink; hp≤0 is a marked Phase-4 TODO, no splice/shrapnel
-  yet); the real `detonateBarrelsInRadius(x,y,radius,cause,damage=LETHAL)` **filled
-  into both `enemies.js` and `abilities.js`** (B10, closing both dangling seams);
-  `shotsVsBarrels()` (B4, self-contained consume-pass); `initBarrels()` (lazy-inits
-  `G.shrapnel`). **Still owed:** kick/roll physics (Phase 3, B3), detonation
-  resolution + shrapnel species + chain reactions (Phase 4, B5–B9), and `player.js`'s
-  barrel carry-FSM branches (B5/B6, `carriedBarrel()` doesn't exist yet).
+  + Phase 3 (carry/kick + roll physics) done:** `CFG.BARREL` block in `config.js` (§2.3);
+  `enemies.js` exports `sweepDeadSpawners` alias (B9) + the Wraith/Lobber
+  `detonateBarrelsInRadius` call sites pass a 5th `damage` arg (B10). `src/barrels.js`
+  (Phase 2): decorates the loader's `barrel` placeholder (`hp`/`r`/`vx`/`vy`/`rolling`/
+  `_cause` + a `G.lights` emitter); `fireStateOf`/`lightRadiusOf` (pure fns of hp, §2.5);
+  `damageBarrel` (§3.1, the single intake sink; hp≤0 is a marked Phase-4 TODO, no
+  splice/shrapnel yet); the real `detonateBarrelsInRadius(x,y,radius,cause,damage=LETHAL)`
+  **filled into both `enemies.js` and `abilities.js`** (B10); `shotsVsBarrels()` (B4);
+  `initBarrels()` (lazy-inits `G.shrapnel`). **Phase 3:** `player.js` carry-FSM branches
+  (B5/B6 — barrel pickup [crate-first], no wall-vault, `releaseBarrel` KICK-moving /
+  PLACE-stationary, `carriedBarrel()` + `notifyCarriedBarrelDestroyed()`, `dropCarried`
+  barrel branch); `enemies.js` `meleeExchange` carried-barrel chip (B5) via the new
+  `registerBarrelDamage` seam; `barrels.js` `kickBarrel` + `updateBarrels(dt)` roll
+  integrator (the 2nd sanctioned `moveBody` exception, ADD `slideStep` reflect model,
+  B3) + the `registerBarrelKick` fill into `player.js`. **Still owed:** detonation
+  resolution + shrapnel species + chain reactions (Phase 4, B7–B9) — `damageBarrel` hp≤0
+  is still a TODO; `notifyCarriedBarrelDestroyed` awaits its detonate-in-hand caller.
 - [x] §6.4 Pathfinding — **BUILT.** `nav.js` complete. **Phase 1
   (infrastructure):** mask predicates (`isNavBlocked`, GROUND/PHANTOM),
   mask-split occupancy grid derived from live `G` arrays (D3), dirty/version
@@ -565,10 +628,11 @@ player-only AoE on landing + barrel seam; `deathSweep` now calls
 `boss:killed` FX for `e.boss` (Phase 8, Reaper); `integrateEnemyKnockback` routes
 `nav==="phantom"` knockback through `phantomMover` (Phase 8);
 `playerShotEnemyPass`/`meleeExchange` also test `G.spawners` (Phase 9, §0.4);
-new
-`registerBarrelDetonation` seam (no-op default, SPEC-BARRELS owed); imports
-config/state/world/player-sinks/level-loader/projectiles/enemies-ai, never
-imported back [R6]). `level-loader.js` gained `getEntityFactory(type)` (Phase
+`meleeExchange` also chips a `carriedBarrel()` 1 HP via the `registerBarrelDamage`
+seam (SPEC-BARRELS Phase 3, B5); the `registerBarrelDetonation` +
+`registerBarrelDamage` seams are both **filled by `barrels.js` at load** (were
+no-op defaults); imports config/state/world/player-sinks (+`carriedBarrel`)/
+level-loader/projectiles/enemies-ai, never imported back [R6]). `level-loader.js` gained `getEntityFactory(type)` (Phase
 9) — a read-back accessor so a later subsystem's factory can DECORATE the
 current registration instead of re-deriving its logic (used by `makeSpawner`
 to reuse the placeholder's eligibility-filtered `table`/ramped
@@ -587,15 +651,24 @@ emit at cast]; both registered at load via `registerAbility` + both exported as
 `__onNova`/`__onLightning` for headless tests; Nova immunity is by OMISSION
 [never references `G.spawners`/`G.crates`/`G.barrels`]; imports config/state +
 one-way `emit`/`registerAbility`+`applyStun`/`sweepDeadEnemies`, never imported
-back). `barrels.js` (**SPEC-BARRELS #6, Phase 2**: barrel entity decoration
-[`getEntityFactory("barrel")` decorate-pattern], `fireStateOf`/`lightRadiusOf`
-[pure fns of hp], `damageBarrel` [the single intake sink; hp≤0 is a marked
-Phase-4 TODO], the real `detonateBarrelsInRadius` [filled into BOTH
+back). `barrels.js` (**SPEC-BARRELS #6, Phase 2 + Phase 3**: barrel entity
+decoration [`getEntityFactory("barrel")` decorate-pattern], `fireStateOf`/
+`lightRadiusOf` [pure fns of hp], `damageBarrel` [the single intake sink; hp≤0 is
+a marked Phase-4 TODO], the real `detonateBarrelsInRadius` [filled into BOTH
 `enemies.js`'s and `abilities.js`'s `registerBarrelDetonation`], `shotsVsBarrels`
-[self-contained shot-consume pass], `initBarrels`; imports config/state/world/
-level-loader/`enemies.js`'s `sweepDeadEnemies`+`sweepDeadSpawners`/
-`abilities.js`'s `registerBarrelDetonation`, never imported back [R6]; still
-owed: roll/kick physics [Phase 3] and detonation/shrapnel resolution [Phase 4]).
+[self-contained shot-consume pass], `initBarrels`; **Phase 3:** `kickBarrel`
+[re-insert + roll velocity, registered into `player.js` via `registerBarrelKick`]
++ `updateBarrels(dt)` [the bespoke roll integrator — the **2nd sanctioned
+`moveBody` exception** after `phantomMover`: ADD `slideStep` reflect model,
+`barrelHitsSolid` = `isWall` ∪ `bodyHitsBlocker(e=>e!==self)` bounce set, settle
+`<stopSpeed`, rolling-impact enemy −1/barrel −1/−40% via `damageBarrel
+"player-kick"` + ONE `sweepDeadEnemies`] + `damageBarrel` registered into
+`enemies.js`'s `registerBarrelDamage` seam [the carried-barrel melee chip];
+imports config/state/world/level-loader/`enemies.js`'s `sweepDeadEnemies`+
+`sweepDeadSpawners`+`registerBarrelDamage`/`abilities.js`'s
+`registerBarrelDetonation`/`player.js`'s `registerBarrelKick` [the sanctioned
+barrels→player edge], never imported back [R6]; still owed: detonation/shrapnel
+resolution [Phase 4]).
 Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
 `test-level-loader.js` (40), `test-level-content.js` (79),
@@ -607,15 +680,17 @@ Tests:
 `test-enemies-reaper.js` (24), `test-enemies-spawner.js` (28),
 `test-abilities-seams.js` (29), `test-abilities.js` (18),
 `test-abilities-lightning.js` (22), `test-abilities-nova.js` (54),
-`test-barrels-seams.js` (40), `test-barrels.js` (44) —
-all green (**826 checks total**). Subsystems #1, #2, #3, #4 (Enemies +
+`test-barrels-seams.js` (40), `test-barrels.js` (44),
+`test-barrels-carry.js` (61) —
+all green (**887 checks total**). Subsystems #1, #2, #3, #4 (Enemies +
 spawners), and #5 (Abilities) are all COMPLETE: nav consumer layer, combat
 spine, all 9 roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton
 Shooter/Fire Wraith/Lobber/Reaper), spawners (emission + spawner-as-target),
 and the gem economy + Nova + Lightning abilities — all built and tested
 headlessly. SPEC-BARRELS (#6, in progress): Phase 1 (enabling edits) + Phase 2
-(`barrels.js` entity/ladder/damage-intake/seam-fill) done; Phase 3 (roll/kick)
-and Phase 4 (detonation/shrapnel) owed.
+(`barrels.js` entity/ladder/damage-intake/seam-fill) + Phase 3 (carry/kick +
+roll physics) done; Phase 4 (detonation resolution / shrapnel / chain reactions)
+owed.
 
 ## Implementation sequencing (agreed order)
 
@@ -1707,6 +1782,73 @@ physics, or the real detonation fn yet:
   the real `detonateBarrelsInRadius(x,y,radius,cause,damage=LETHAL)`, and its
   registration into **both** `enemies.js` and `abilities.js` via each module's
   `registerBarrelDetonation`.
+
+### 2026-07-06 — SPEC-BARRELS Phase 3 (carry/kick integration + roll physics)
+Built the carry/kick FSM branches (`player.js`, B5/B6), the carried-barrel melee
+chip (`enemies.js`, B5), and the roll integrator (`barrels.js`, B3). Load-bearing
+decisions:
+
+- **The barrel roll integrator is the SECOND sanctioned `moveBody` exception**
+  (after `enemies-ai.js`'s `phantomMover`, §0.1/R4). `world.moveBody` only
+  *slides-and-stops* — it never *reflects* velocity — so a kicked barrel that must
+  bounce off walls/solids cannot route through it. `barrels.js`'s `updateBarrels(dt)`
+  ports ADD `dustbin.js slideStep` wholesale (verified in §12): per-axis reflect
+  `v = -v·bounce` off a solid, a corner "reflect-both / hold position" case, then
+  exponential friction `v *= exp(-friction·dt)`. The bounce set is
+  `barrelHitsSolid` = `isWall` (tile test at the prospective centre, matching ADD)
+  ∪ `bodyHitsBlocker(x,y,r, e => e !== self)` — walls + crates + spawners + OTHER
+  barrels, self excluded by the filter (the rolling barrel is in `G.barrels`).
+  Enemies are deliberately NOT in the bounce set: a barrel rolling ≥ `impactSpeed`
+  (96 px/s) passes THROUGH an overlapped enemy, dealing `impactDmg`(1), losing
+  `impactSelfHp`(1) via `damageBarrel(…,"player-kick")` and `speed×(1-impactSlow)`
+  (−40%); ONE `sweepDeadEnemies()` runs after the whole pass (never per-hit).
+  Barrel-vs-barrel is bounce-only, no damage (OQ-B1); the player takes NO roll
+  damage (the pass never references the player). `world.js` is untouched (same
+  ruling as `phantomMover`: a contained bespoke mover beats widening the shared leaf).
+
+- **Circular-import resolution — two new register-callback seams.** B1 pins the
+  import direction as `barrels.js → player.js` and `barrels.js → enemies.js`, and
+  "nothing imports `barrels.js`". But `player.js`'s barrel-release must *call*
+  `kickBarrel` (in `barrels.js`) and `enemies.js`'s `meleeExchange` must *call*
+  `damageBarrel` (in `barrels.js`) — both would be back-imports, i.e. cycles. Per
+  the CLAUDE.md rule (register a callback rather than import upward), `player.js`
+  exposes `registerBarrelKick(fn)` and `enemies.js` exposes `registerBarrelDamage(fn)`,
+  both no-op defaults, and `barrels.js` FILLS both at load (the same idiom as the
+  existing `registerBarrelDetonation` / `registerAbility` seams). `barrels.js` now
+  imports `player.js`'s `registerBarrelKick` — the sanctioned `barrels → player`
+  edge B1 anticipated. Graph re-verified one-way: a repo-wide grep confirms nothing
+  imports `barrels.js` back.
+
+- **Splice-out SYMMETRY (the phase's named risk) — every release path re-inserts
+  into `G.barrels`.** Pickup splices the barrel OUT (crate pattern) so it stops
+  blocking/occupying; each release must put it back: KICK (moving) re-inserts
+  rolling via `kickBarrel`, PLACE (stationary) re-inserts static via the new
+  `placeBarrelAtTile`. **The STUN force-drop (`dropCarried`) was an unflagged
+  fourth release path** — it routed unconditionally to `dropCrateAtTile`, which
+  would have pushed a barrel into `G.crates` (wrong array → leak/duplicate). Fixed
+  by branching `dropCarried` on `carry.type` → `placeBarrelAtTile` for barrels.
+  This is in-scope correctness (the stun path IS a release path the splice-out
+  invariant governs), not new design. The ONLY path that clears carry WITHOUT
+  re-inserting is `notifyCarriedBarrelDestroyed()` (Phase-4 detonate-in-hand — the
+  barrel is gone from the world), added as a sink but not yet called.
+
+- **Detonation resolution stays a Phase-4 TODO.** A kicked/carried barrel CAN
+  reach hp≤0 this phase (kick-impact self-damage, shot/melee/detonation intake),
+  but `damageBarrel`'s hp≤0 branch is still the marked no-op — no shrapnel, no
+  splice. Confirmed by the phase prompt's explicit fence.
+
+- **Test:** `test-barrels-carry.js` (61 checks, green) — pickup/splice + crate-first
+  order, `carriedBarrel()` + `notifyCarriedBarrelDestroyed` (no re-insert), place-static
+  + kick-rolling (both re-insert), enemy-melee → player damaged AND barrel −1,
+  exponential decel + one-step decay, settle + nav-dirty, bounce off wall/crate/
+  spawner/other-barrel at 0.6, rolling impact (enemy −1 / barrel −1 / −40% /
+  `player-kick`), sub-threshold inert, no-player-roll-damage, no-wall-vault. Suite
+  826 → **887**, purely additive.
+
+- **Owed next (SPEC-BARRELS Phase 4):** detonation resolution (owner derive →
+  shrapnel burst → `barrel:exploded` emit → `markNavDirty` → drop light emitter →
+  splice), the shrapnel species (`G.shrapnel` + `updateShrapnel`, B7), chain
+  reactions (B8/B9), and the detonate-in-hand caller for `notifyCarriedBarrelDestroyed`.
 
 ## Known open items (non-blocking for build)
 

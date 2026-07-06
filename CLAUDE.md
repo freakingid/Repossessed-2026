@@ -93,7 +93,7 @@ src/
   projectiles.js   // shots, arrows; ricochet rules. Shrapnel does NOT live here — see barrels.js (B7).
   combat.js        // damage exchange, attribution/ownership tags.
   abilities.js     // Nova, Lightning, gem economy.  EXISTS (SPEC-ABILITIES COMPLETE). BOOT must `import "./abilities.js"` so registerAbility runs. registerBarrelDetonation seam filled by barrels.js.
-  barrels.js       // Barrel entity, fire ladder, damage intake, roll/kick physics, detonation + shrapnel (G.shrapnel lives HERE, not projectiles.js — B7), chain reactions.  EXISTS (SPEC-BARRELS P2: entity decoration, fireStateOf/damageBarrel, the real detonateBarrelsInRadius filled into BOTH enemies.js and abilities.js, shotsVsBarrels. Roll physics + detonation/shrapnel resolution owed P3/P4). BOOT must `import "./barrels.js"` so the barrel factory decoration + dual seam registration run before frame 1.
+  barrels.js       // Barrel entity, fire ladder, damage intake, roll/kick physics, detonation + shrapnel (G.shrapnel lives HERE, not projectiles.js — B7), chain reactions.  EXISTS (SPEC-BARRELS P2: entity decoration, fireStateOf/damageBarrel, the real detonateBarrelsInRadius filled into BOTH enemies.js and abilities.js, shotsVsBarrels. P3: kickBarrel + updateBarrels roll integrator [2nd sanctioned moveBody exception], carry/kick FSM in player.js, meleeExchange carried-barrel chip via registerBarrelDamage seam. Detonation/shrapnel resolution owed P4). BOOT must `import "./barrels.js"` so the barrel factory decoration + dual seam registration run before frame 1.
   events.js        // pub/sub; one-way dependency.
   savegame.js      // pure-leaf save/load (rep_-prefixed keys).
   achievements.js  // events subscriber.

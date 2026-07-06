@@ -33,7 +33,7 @@ import { CFG } from "./config.js";
 import { G } from "./state.js";
 import { tileCenter } from "./world.js";
 import {
-  applyDamageToPlayer, applyKnockbackToPlayer, applyEntangle, isCarryingCrate,
+  applyDamageToPlayer, applyKnockbackToPlayer, applyEntangle, isCarryingCrate, carriedBarrel,
 } from "./player.js";
 import { emit, registerEntityFactory, getEntityFactory, markNavDirty } from "./level-loader.js";
 import { makeShot } from "./projectiles.js";
@@ -148,6 +148,14 @@ registerReaperBlast((e, ux, uy) => {
 // default; SPEC-BARRELS registers the real fn.
 let detonateBarrelsInRadius = () => {};
 export function registerBarrelDetonation(fn) { detonateBarrelsInRadius = fn; }
+
+// Barrel-damage seam (SPEC-BARRELS B5) — a CARRIED barrel is spliced out of
+// G.barrels, so detonateBarrelsInRadius (which scans G.barrels) can't reach it;
+// meleeExchange chips it directly through this sink. barrels.js registers its
+// damageBarrel; no-op until then. enemies.js never imports barrels.js — the
+// one-way rule (barrels.js imports enemies.js, not the reverse).
+let damageCarriedBarrel = () => {};
+export function registerBarrelDamage(fn) { damageCarriedBarrel = fn; }
 
 /* ---- Per-type AI dispatch (step 6) -------------------------------------- *
    Keyed by entity type. Later phases add their updater here; this phase ships
@@ -472,6 +480,10 @@ function meleeExchange() {
       e.hp -= CFG.PLAYER.meleeDamageToEnemy;      // player deals 2 (ADD mop value)
       const m = CFG.ENEMY[e.type]?.melee;         // MELEE NULL-GUARD (meleeless types deal 0)
       if (m != null) applyDamageToPlayer(m, e.type);
+      // B5: a carried barrel is a live target — an enemy in melee ALSO chips it
+      // 1 HP (the player still takes normal melee, above). Guarded on carriedBarrel().
+      const cb = carriedBarrel();
+      if (cb) damageCarriedBarrel(cb, 1, "enemy-" + e.type);
       applyKnockbackToPlayer(-nx, -ny, CFG.PLAYER.knockbackImpulse);   // player away from enemy
       applyKnockbackToEnemy(e, nx, ny, CFG.ENEMY.knockbackImpulse);    // enemy away from player
       e.contact = true;

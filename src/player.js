@@ -48,6 +48,18 @@ export function registerSfx(handlers) {
   if (handlers && typeof handlers === "object") Object.assign(sfx, handlers);
 }
 
+/* ---- Barrel-kick seam (SPEC-BARRELS B3, register-callbacks) --------------
+   A moving barrel release KICKS it rolling (barrels.js kickBarrel: re-insert
+   into G.barrels + set roll velocity). player.js NEVER imports barrels.js
+   (the one-way rule — nothing imports barrels.js); barrels.js registers its
+   kick fn here at load, exactly like #5 registers its ability handlers.
+   Default no-op (a kick before barrels.js loads would silently drop the
+   barrel — acceptable; boot + every test import barrels.js). */
+let barrelKickSink = () => {};
+export function registerBarrelKick(fn) {
+  barrelKickSink = typeof fn === "function" ? fn : () => {};
+}
+
 // Edge-detect state for the ability triggers (reset by initPlayer).
 let prevNova = false;
 let prevLightning = false;
@@ -65,7 +77,7 @@ export function initPlayer() {
   p.vx = 0; p.vy = 0;            // reserved (0 in normal move)
   p.kvx = 0; p.kvy = 0;          // knockback velocity (decays; ADD pattern)
   p.loco = "NORMAL";
-  p.carry = null;                // null | { type:"crate", entity }  (barrels deferred)
+  p.carry = null;                // null | { type:"crate"|"barrel", entity }
   p.iframe = 0;                  // post-hit invuln seconds
   p.vault = null;                // null | { t, dur, from:{x,y}, to:{x,y} }
   p.entangle = 0;                // seconds remaining (0 = not)
@@ -416,6 +428,8 @@ function carryActions(p, snap, dt) {
   if (p.loco === "CARRYING") {
     // While CARRYING, the fire input is repurposed as the RELEASE command (P5).
     if (snap.fireHeld) { releaseCarry(p, snap); return; }
+    // Barrels never wall-vault (B6) — vault is a crate-exclusive utility.
+    if (p.carry && p.carry.type === "barrel") return;
     // No release ⇒ a carrying player walking into a 1-thick wall auto-vaults it.
     tryWallVault(p, snap);
     return;
@@ -432,14 +446,28 @@ function carryActions(p, snap, dt) {
 function tryPickup(p) {
   if (p.carry) return;                                // safety: never swap
   const crate = firstOverlappingCrate(p);
-  if (!crate) return;
-  const idx = G.crates.indexOf(crate);
-  if (idx >= 0) G.crates.splice(idx, 1);
-  markNavDirty(crateTile(crate));                     // old tile no longer blocks
-  updatePlatePress(p);                                // crate lifted ⇒ release its plate (unless player holds it)
-  p.carry = { type: "crate", entity: crate };
+  if (crate) {                                        // crate-FIRST order preserved (B6)
+    const idx = G.crates.indexOf(crate);
+    if (idx >= 0) G.crates.splice(idx, 1);
+    markNavDirty(crateTile(crate));                   // old tile no longer blocks
+    updatePlatePress(p);                              // crate lifted ⇒ release its plate (unless player holds it)
+    p.carry = { type: "crate", entity: crate };
+    p.loco = "CARRYING";
+    emit("crate:pickup", { x: p.x, y: p.y, tx: (p.x / CFG.TILE) | 0, ty: (p.y / CFG.TILE) | 0 });
+    return;
+  }
+  // Barrels are the volatile carry sibling (SPEC-BARRELS B5/B6): same hands-free
+  // pickup, spliced from G.barrels so it stops blocking/occupying while held. If a
+  // crate AND a barrel both overlap, the crate wins (checked first, above). No
+  // plate press — barrels aren't in the crate plate-weight system.
+  const barrel = firstOverlappingBarrel(p);
+  if (!barrel) return;
+  const bidx = G.barrels.indexOf(barrel);
+  if (bidx >= 0) G.barrels.splice(bidx, 1);
+  markNavDirty({ tx: (barrel.x / CFG.TILE) | 0, ty: (barrel.y / CFG.TILE) | 0 });
+  p.carry = { type: "barrel", entity: barrel };
   p.loco = "CARRYING";
-  emit("crate:pickup", { x: p.x, y: p.y, tx: (p.x / CFG.TILE) | 0, ty: (p.y / CFG.TILE) | 0 });
+  emit("barrel:pickup", { x: p.x, y: p.y, tx: (p.x / CFG.TILE) | 0, ty: (p.y / CFG.TILE) | 0 });
 }
 
 // First crate whose one-tile footprint overlaps the player body, or null. Pixel
@@ -454,6 +482,18 @@ function firstOverlappingCrate(p) {
   return null;
 }
 
+// First barrel whose body overlaps the player, or null. Uses the barrel's own
+// body radius (r) — the barrel-specific passes in barrels.js likewise test b.r.
+function firstOverlappingBarrel(p) {
+  if (!G.barrels) return null;
+  for (const e of G.barrels) {
+    const rr = p.r + e.r;
+    const dx = p.x - e.x, dy = p.y - e.y;
+    if (dx * dx + dy * dy < rr * rr) return e;
+  }
+  return null;
+}
+
 /* ---- Release (§9, P5) — fire input while CARRYING ------------------------
    Branch on move-input THIS FRAME (nonzero = "moving", NOT measured velocity —
    Q-P3): moving ⇒ drop-in-place + auto-vault; stationary (or vault-blocked) ⇒
@@ -461,8 +501,37 @@ function firstOverlappingCrate(p) {
 function releaseCarry(p, snap) {
   const move = snap.move || { x: 0, y: 0 };
   const moving = move.x !== 0 || move.y !== 0;
+  if (p.carry && p.carry.type === "barrel") { releaseBarrel(p, snap, moving); return; }
   if (moving && canVault(p)) movingReleaseVault(p, snap, move);
   else stationaryToss(p, snap);                       // stationary, or entangled/stunned ⇒ degrade to toss
+}
+
+/* ---- Barrel release (SPEC-BARRELS B6) ------------------------------------
+   Diverges from crates: NO vault. Moving ⇒ KICK it rolling (barrels.js
+   kickBarrel via the registered seam — re-inserts into G.barrels + sets roll
+   velocity); stationary ⇒ place upright static on the settle tile (crate-toss
+   settle, never rolls after). BOTH paths re-insert the barrel into G.barrels —
+   the splice-out symmetry the whole carry hinges on (the ONLY release path that
+   skips the re-insert is detonate-in-hand: Phase 4's notifyCarriedBarrelDestroyed). */
+function releaseBarrel(p, snap, moving) {
+  const barrel = p.carry.entity;
+  if (moving) {
+    // KICK: drop on the player's current tile centre, then roll along aim (B3).
+    const tx = (p.x / CFG.TILE) | 0, ty = (p.y / CFG.TILE) | 0;
+    const cx = (tx + 0.5) * CFG.TILE, cy = (ty + 0.5) * CFG.TILE;
+    barrel.x = cx; barrel.y = cy; barrel.tc = { x: cx, y: cy };
+    p.carry = null;
+    p.loco = "NORMAL";
+    const a = unit(snap.aim || { x: 1, y: 0 });
+    barrelKickSink(barrel, a.x, a.y);                 // barrels.js: re-insert + roll velocity
+    emit("barrel:kicked", { x: cx, y: cy, tx, ty });
+  } else {
+    // PLACE: settle upright static on the first free tile along aim (like a
+    // crate toss); never rolls after settling.
+    const t = tossSettleTile(p, snap.aim || { x: 1, y: 0 });
+    placeBarrelAtTile(p, barrel, t.tx, t.ty, "place");
+    p.loco = "NORMAL";
+  }
 }
 
 // Stationary release: settle the crate on the first free tile up to tossMax(1.5t)
@@ -525,6 +594,25 @@ function dropCrateAtTile(p, tx, ty, reason) {
   emit("crate:dropped", { reason, x: cx, y: cy, tx, ty });
 }
 
+// Re-insert the carried barrel as a resting STATIC blocker at tile (tx,ty):
+// reposition (pixel centre), zero roll, push to G.barrels, nav-dirty, clear
+// carry, emit. Mirrors dropCrateAtTile but for the barrel array — NO plate press
+// (barrels aren't in the crate plate-weight system), NO vault, never rolls after.
+// Used by the stationary place release AND the STUN force-drop (dropCarried) so
+// neither leaks the barrel out of the world nor misroutes it into G.crates.
+function placeBarrelAtTile(p, barrel, tx, ty, reason) {
+  const cx = (tx + 0.5) * CFG.TILE, cy = (ty + 0.5) * CFG.TILE;
+  barrel.type = "barrel";
+  barrel.x = cx; barrel.y = cy; barrel.tc = { x: cx, y: cy };
+  barrel.blocks = true;
+  barrel.vx = 0; barrel.vy = 0; barrel.rolling = false;
+  if (!G.barrels) G.barrels = [];
+  G.barrels.push(barrel);
+  markNavDirty({ tx, ty });
+  p.carry = null;
+  emit("barrel:placed", { reason, x: cx, y: cy, tx, ty });
+}
+
 // Enter VAULTING toward `to` (a pixel point). advanceVault (§5.1) lerps from→to
 // over vaultDur and auto-returns to NORMAL; during it collision + input are
 // skipped and iframe is treated active (applyDamageToPlayer no-ops on VAULTING).
@@ -583,6 +671,27 @@ function dominantAxis(move) {
 export function isCarryingCrate() {
   const p = G.player;
   return !!(p && p.loco === "CARRYING" && p.carry && p.carry.type === "crate");
+}
+
+/* ---- Carried-barrel accessors (SPEC-BARRELS B5) --------------------------
+   The carried barrel is spliced OUT of G.barrels (crate pattern) so it stops
+   blocking/occupying — its effective hit position is the player centre. #4's
+   meleeExchange and barrels.js's shot/shrapnel passes test this in addition to
+   G.barrels: an enemy hitting a carrying player also chips the held barrel, and
+   at 0 HP it detonates in-hand (Phase 4). */
+export function carriedBarrel() {
+  const p = G.player;
+  return p && p.carry && p.carry.type === "barrel" ? p.carry.entity : null;
+}
+
+// Detonate-in-hand sink (Phase 4 calls it): clears the carried barrel WITHOUT
+// re-inserting into G.barrels — the ONE release path that legitimately skips the
+// re-insert (the barrel exploded; it is gone from the world). loco → NORMAL.
+export function notifyCarriedBarrelDestroyed() {
+  const p = G.player;
+  if (!p || !p.carry || p.carry.type !== "barrel") return;
+  p.carry = null;
+  if (p.loco === "CARRYING") p.loco = "NORMAL";
 }
 
 /* =========================================================================
@@ -658,6 +767,10 @@ function spawnVolley(p, aim, tri, big, bn) {
 function dropCarried(reason) {
   const p = G.player;
   if (!p.carry) return;
-  dropCrateAtTile(p, (p.x / CFG.TILE) | 0, (p.y / CFG.TILE) | 0, reason);
+  const tx = (p.x / CFG.TILE) | 0, ty = (p.y / CFG.TILE) | 0;
+  // Barrel force-drop settles STATIC into G.barrels (splice-out symmetry) — must
+  // NOT route through dropCrateAtTile, which would push the barrel into G.crates.
+  if (p.carry.type === "barrel") placeBarrelAtTile(p, p.carry.entity, tx, ty, reason);
+  else dropCrateAtTile(p, tx, ty, reason);
   if (p.loco === "CARRYING") p.loco = "NORMAL";
 }
