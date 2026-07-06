@@ -17,8 +17,8 @@ import { isWall } from "./world.js";
    bounceCount}. No ADD extras (wob/danPosAtFire/spawnTime/chainCount/wallsHit).
    Callers (player.js fire hook) supply the resolved velocity, radius, damage,
    owner tag, and Bounce flag. */
-export function makeShot({ x, y, vx, vy, r, dmg, owner = "player", bounce = false }) {
-  return { x, y, vx, vy, r, dmg, traveled: 0, owner, bounce, bounceCount: 0 };
+export function makeShot({ x, y, vx, vy, r, dmg, owner = "player", bounce = false, maxTravel, effect = "damage" }) {
+  return { x, y, vx, vy, r, dmg, traveled: 0, owner, bounce, bounceCount: 0, maxTravel, effect };
 }
 
 // Does a resting crate occupy tile (tx,ty)? Crates are tile-aligned movable
@@ -98,7 +98,7 @@ export function updateShots(dt) {
     // contact was already resolved as a ricochet above, so a non-bounce shot
     // never "dies on a crate" — crate tiles aren't isWall-solid anyway.)
     const inWall = isWall((s.x / TILE) | 0, (s.y / TILE) | 0);
-    if (s.traveled >= CFG.SHOT.range || (!s.bounce && inWall)) {
+    if (s.traveled >= (s.maxTravel ?? CFG.SHOT.range) || (!s.bounce && inWall)) {
       shots.splice(i, 1);
       continue;
     }

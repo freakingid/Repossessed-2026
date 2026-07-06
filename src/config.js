@@ -176,4 +176,46 @@ export const CFG = {
     repathMinInterval: 0.5,    // s — per-navigator repath rate floor (proposed, Q-NAV; consumed by #4, not nav)  (GDD §6.4)
     diagonalCost: Math.SQRT2,  // 8-dir diagonal step cost; orthogonal = 1.0  (used by Phase 2 A*)
   },
+
+  // Enemy roster stat block (SPEC-ENEMIES §5). Values transcribed from
+  // GDD §6.2/§6.1; speeds stored as speedMul, resolved at read time as
+  // speedMul * CFG.PLAYER.speed(112) * G.ramp.enemySpeedMult (E10 — HP/damage
+  // never ramp). Every points/gems value and every `(proposed)` dial is
+  // flagged for the later §14.2 tuning sign-off (same posture as SPEC-LEVEL/
+  // SPEC-PLAYER) — not a build blocker.
+  ENEMY: {
+    // shared nav-consumer dials (E2/E3)
+    repathMinInterval: 0.5,       // = CFG.NAV.repathMinInterval, s per-navigator repath floor
+    repathBudgetPerFrame: 4,      // (proposed) round-robin ceiling
+    arriveDist: 9,                // px — ADD value (VERIFIED, R9: already px, do not *TILE)
+    wpTimeout: 5,                 // s — ADD value (VERIFIED)
+
+    ghost:           { hp: 2, points: 50,  gems: 1, r: 12, speedMul: 0.45, melee: 1, nav: "direct" },
+    skeleton:        { hp: 4, points: 100, gems: 1, r: 12, speedMul: 0.50, melee: 1, nav: "wallslide" },
+    skeletonShooter: { hp: 4, points: 150, gems: 2, r: 12, speedMul: 0.65, melee: 1, nav: "ground",
+                       los: 6, arrow: { dmg: 2, speedMul: 8 / 3.5, range: 6 }, windup: 0.4, cooldown: 1.5,
+                       awareDecay: 8 /* stopToShoot from G.ramp.shooterStopToShoot */ },
+    lobber:          { hp: 2, points: 100, gems: 1, r: 12, speedMul: 0.40, fleeMul: 0.95, melee: 1,
+                       nav: "cover", lobRange: 9, lobEvery: 2.5, airtime: 1.0, blast: 1.25, lobDmg: 2,
+                       losCheckEvery: 0.12 /* ADD; errorRadius from G.ramp.lobberErrorRadius */ },
+    bat:             { hp: 2, points: 150, gems: 1, r: 12, speedMul: 1.15, melee: 2, nav: "flight"
+                       /* pauseMin/Max from G.ramp.batPauseMin/Max */ },
+    spider:          { hp: 4, points: 200, gems: 2, r: 12, melee: 2, nav: "direct-retreat",
+                       burstMul: 1.5, burstDur: 0.5, pauseDur: 0.6, retreatDur: 1.5,
+                       web: { dmg: 0, speedMul: 11 / 3.5, range: 7, entangle: 2.5 }
+                       /* webCooldown from G.ramp.spiderWebCooldown */ },
+    zombie:          { hp: 8, points: 200, gems: 3, r: 12, speedMul: 0.28, melee: 3, nav: "ground" },
+    fireWraith:      { hp: 2, points: 150, gems: 2, r: 12, speedMul: 0.50, nav: "ground",
+                       armDist: 1.5, flashDur: 0.8, flashMul: 0.5, explodeRadius: 2, explodeDmg: 4,
+                       glowRadius: 1.5 /* §8.4 dark levels */ },
+    reaper:          { hp: 20, points: 750, gems: 10, r: 14, speedMul: 0.40, melee: 3, nav: "phantom",
+                       boss: true, blastDmg: 3, blastSpeedMul: 7 / 3.5, blastRange: 448, // proposed, Q5/R7 (14 t x 32, mirrors Nova cap)
+                       summon: { pick: ["ghost", "ghost", "skeleton"], // 2:1 -> 50/50 per GDD
+                                 minionCap: 6 }
+                       /* summonInterval from G.ramp.reaperSummonInterval; blastEvery 9 s fixed */ },
+    spawner:         { hp: 6, points: 300, gems: 3, r: 16 /* tile-aligned static */, emerge: 0.5,
+                       firstDelay: 2.0 /* interval/liveCap come ramped off the placeholder */ },
+  },
+
+  GEM: { energy: 5 },  // §3.5 — each dropped gem = 5 energy (feeds #5's Nova bar)
 };

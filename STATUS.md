@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-PATHFINDING Phase 2 — `findPath` grid A\* added to `nav.js`: 8-dir, octile heuristic, per-mask corner-cut prevention (R1), deterministic tie-break (D7). §6.4 build-status box FLIPPED to BUILT. Subsystem #3 done; repath scheduler/steering owed to #4.)
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 1 — `CFG.ENEMY`/`CFG.GEM` data added; three shipped-file seam edits: `projectiles.js` maxTravel/effect, `player.js` applyEntangle sink, `level-loader.js` ENTITY_ARRAY 8-loose-type extension + `G.ebolts`. Foundation only, no AI/combat built yet — subsystem #4 not flipped.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
 incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
@@ -55,7 +55,13 @@ current or the next session starts blind.
   direct-steer fallback (pending Q1 sign-off — Shape 1 baselined); `installNav()`
   wiring into game startup (later integration phase); barrel-destruction
   `markNavDirty` (SPEC-BARRELS).
-- [ ] §6 Enemies + spawners
+- [ ] §6 Enemies + spawners — **Phase 1 (foundation) done:** `CFG.ENEMY`/`CFG.GEM`
+  added to `config.js`; `enemies.js` itself not started. Three shipped-file seam
+  edits landed (see Session log below): `projectiles.js` (`makeShot` maxTravel/
+  effect + `updateShots` expiry reads `s.maxTravel ?? CFG.SHOT.range`),
+  `player.js` (`applyEntangle` sink), `level-loader.js` (`ENTITY_ARRAY` now
+  routes the 8 loose enemy types to `"enemies"`; `clearTransient` resets
+  `G.ebolts`).
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -1068,3 +1074,71 @@ round-robin / waypoint steering / direct-steer fallback → **#4** (pending **Q1
 sign-off, Shape 1 baselined); `installNav()` wiring into game startup → later
 **integration** phase; barrel-destruction `markNavDirty` → **SPEC-BARRELS**.
 No git.
+
+### 2026-07-05 — SPEC-ENEMIES Phase 1 (`CFG.ENEMY`/`CFG.GEM` + three shipped-file seam edits)
+
+First build phase of subsystem #4 (Enemies + spawners). Additive data plus
+three surgical `str_replace` edits into already-shipped files (SPEC-ENEMIES §5,
+§7, E1, E5, E7) — no AI/combat logic built yet. New `test-enemies-config.js`
+(18 checks green). Full suite green, **407 checks total** (config 19 / world 35
+/ level-loader 40 / level-content 79 / level-generator 20 / level-integration 16
+/ input 19 / player 108 / projectiles 17 / nav 36 / enemies-config 18).
+
+- **`config.js` — `CFG.ENEMY` + `CFG.GEM` added** (transcribed from
+  SPEC-ENEMIES §5 verbatim): shared nav-consumer dials
+  (`repathMinInterval`/`repathBudgetPerFrame:4`/`arriveDist:9`/`wpTimeout:5`),
+  all nine per-type stat rows (`ghost`/`skeleton`/`skeletonShooter`/`lobber`/
+  `bat`/`spider`/`zombie`/`fireWraith`/`reaper`) + the `spawner` row, and
+  `CFG.GEM.energy:5`. Speeds are `speedMul` (resolved to px/s at read time by
+  #4's later AI code, never here). **Spider has no base `speedMul`** — its
+  speed is entirely described by its burst/pause FSM fields
+  (`burstMul`/`burstDur`/`pauseDur`/`retreatDur`), matching SPEC-ENEMIES §5's
+  spider row exactly (flagged in the config-sanity test, not a gap). The
+  Reaper's `blastRange` (R7, previously `<dial>` in the spec) is set to the
+  spec's own proposed value, **448 px (14 t)**, commented `// proposed, Q5/R7`.
+  No `Infinity` anywhere (sentinel discipline, grep/recursive-scan tested).
+  `config.js` stays a leaf — no new imports.
+- **`projectiles.js` (E1)** — `makeShot` gained two new optional params,
+  **`maxTravel`** (default `undefined`) and **`effect`** (default `"damage"`),
+  both carried onto the returned Shot unchanged alongside every existing field.
+  `updateShots`' expiry comparand changed from `s.traveled >= CFG.SHOT.range` to
+  `s.traveled >= (s.maxTravel ?? CFG.SHOT.range)` — the only line touched;
+  ricochet logic and the non-bounce wall-fizzle are untouched. `updateShots`
+  remains owner-agnostic motion (never applies damage).
+- **`player.js` (E7)** — added `export function applyEntangle(seconds)`
+  (`p.entangle = Math.max(p.entangle, seconds)`, `p.entangleAngle = null`).
+  Does not trip iframe (web is 0-damage) and does not gate on `loco` (entangle
+  stacks with locomotion per §2.5). Placed next to `applyEntangleShave`; the
+  existing entangle machinery (decrement in `tickPlayer`, `entangleMult` in
+  `effectiveMoveSpeed`, the shave) is unchanged — this only adds the missing
+  setter the Spider web will call.
+- **`level-loader.js` (E5 + E1)** — `ENTITY_ARRAY` gained the eight loose-enemy
+  element names (`ghost`/`skeleton`/`skeletonShooter`/`lobber`/`bat`/`spider`/
+  `zombie`/`fireWraith`), all mapped to `"enemies"`, keys exactly matching
+  `CFG.PLAN.introductions` element names (camelCase — `skeletonShooter`/
+  `fireWraith`, not snake_case). The existing `reaper → "enemies"` mapping is
+  untouched. `clearTransient` now also resets `G.ebolts = []` alongside the
+  other transient arrays (the Lobber's arced-ordnance array, §6.1.4/E1 — not a
+  straight `Shot`, so it needs its own array cleared each level load).
+
+Tests (`test-enemies-config.js`, new, 18 checks): CFG.ENEMY has all 9 types +
+spawner, no Infinity, `CFG.ENEMY` loose-type keys == `CFG.PLAN` element names
+(E5 guard); `makeShot` carries `maxTravel`/`effect` when given, defaults
+`effect:"damage"`/`maxTravel:undefined` otherwise; `updateShots` expires a
+`maxTravel:192` shot before a range-224 default would, and expires an
+unspecified shot at `CFG.SHOT.range`; `applyEntangle` raises to the max,
+resets `entangleAngle`, leaves `iframe` untouched; `clearTransient` resets
+`G.ebolts` to `[]` (verified through a real `loadLevel` call); a real
+`loadLevel` placement of a registered stub `"ghost"` factory lands the entity
+in `G.enemies` (proves the `ENTITY_ARRAY` extension routes the loose types,
+not just a unit-level map lookup).
+
+**No spec gaps requiring invented design.** The phase prompt fully specified
+this data and these three edits; the only judgment call was **spider's
+missing `speedMul`**, which is not a gap — SPEC-ENEMIES §5's spider row
+genuinely has no `speedMul` field (FSM-only speed), so the config-sanity test
+was written to expect that, not to paper over it. **Owed by later Phase(s) of
+#4:** `enemies.js` itself (roster AI, nav consumer/repath scheduler, melee
+exchange loop, death/gem/score sweep) — nothing in this phase built any
+behavior, only the data + seam surface it will read. §6 build-status box
+correctly NOT flipped to BUILT. No git.

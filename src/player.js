@@ -220,6 +220,17 @@ function applyEntangleShave(p, mvx, mvy) {
   p.entangleAngle = ang;
 }
 
+// Entangle sink (SPEC-ENEMIES §1 E7): the Spider web calls INTO player rather
+// than reaching G.player directly. Extends (never shortens) the remaining
+// duration; resets entangleAngle so the next-turn shave baseline is fresh.
+// Does not trip iframe (0-damage effect) and does not gate on loco (§2.5 —
+// entangle stacks with locomotion).
+export function applyEntangle(seconds) {
+  const p = G.player;
+  p.entangle = Math.max(p.entangle, seconds);
+  p.entangleAngle = null;
+}
+
 /* ---- Carry-aware blocker filter (§4.2) -----------------------------------
    Policy the caller supplies to world.bodyHitsBlocker (which owns geometry).
    - Never block on the crate we are carrying (spliced from G.crates anyway).

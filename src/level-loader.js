@@ -64,6 +64,13 @@ export function registerEntityFactory(type, fn) { entityFactories.set(type, fn);
 const ENTITY_ARRAY = {
   spawner: "spawners", crate: "crates", barrel: "barrels", reaper: "enemies",
   food: "pickups", treasure: "pickups", key: "pickups", powerup: "pickups",
+  // Loose-enemy element names (SPEC-ENEMIES E5) — camelCase, must match
+  // CFG.PLAN.introductions element names exactly, or placements vanish
+  // silently (placeEntity builds the entity but ENTITY_ARRAY[p.type] is
+  // undefined ⇒ never pushed onto a G array).
+  ghost: "enemies", skeleton: "enemies", skeletonShooter: "enemies",
+  lobber: "enemies", bat: "enemies", spider: "enemies", zombie: "enemies",
+  fireWraith: "enemies",
 };
 
 function mkPlaceholder(blocks, extra) {
@@ -400,7 +407,7 @@ export function loadLevel(def) {
 // nav's to clear (#3) — a no-op sink until nav lands.
 function clearTransient(def) {
   G.shots = []; G.enemies = []; G.spawners = []; G.pickups = [];
-  G.crates = []; G.barrels = []; G.shrapnel = [];
+  G.crates = []; G.barrels = []; G.shrapnel = []; G.ebolts = [];
   G.marks = []; G.floats = []; G.lights = [];               // lights = light-emitter registry
   G.spawnTimer = 0; G.pickupTimer = 0;
   G._levelEndEmitted = false; G._allEnemiesDeadEmitted = false;
