@@ -1,6 +1,44 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 8 — **The Reaper added** (§6.1.9,
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 9 — **Spawners added** (§6.3,
+E4): the roster is now COMPLETE (all 9 types + spawners). `enemies.js`'s
+`makeSpawner` factory **decorates** (does not replace) the loader's existing
+spawner placeholder — `getEntityFactory("spawner")` (new level-loader.js
+accessor, mirrors `registerEntityFactory`) reads back the loader's own
+registration so the Plan-filtered `table`/ramped `interval`/`liveCap`
+eligibility logic is reused rather than re-derived a second time (same
+duplication hazard the `evalRampTable` decision log entry already flagged for
+`level-generator.js`); the wrapper then adds the combat/emission fields:
+`hp`(6)/`points`(300)/`gems`(3)/`r`(16) from `CFG.ENEMY.spawner`, a stable
+`id` (the E4 live-cap tag source, same shape as the Reaper's minion tag), and
+`emitT` seeded at `firstDelay`(2.0s). **Emission (E4, `spawnerTick`, new step 1
+of `tickEnemies`, replacing the Phase-3 no-op hook):** first emit at 2s, then
+every ramped `interval`; a weighted pick (`weightedPick`, new) draws ONLY from
+the spawner's already Plan-filtered `table`; the emitted child is minted via a
+`factoryByType` lookup table over the 8 loose-element factories (never
+"reaper" — level-def-only) and tagged `originSpawner = spawner.id`, emerging
+through the shared 0.5s `spawn>0` gate. **Live-cap is a SCAN, not a counter**
+(`spawnerEmit` counts `G.enemies` for the matching `originSpawner` tag at each
+emit decision) and **R5 is upheld by construction** — the scan has no `spawn`
+filter, so a child mid-emergence still counts toward its spawner's cap.
+**Spawner-as-target (§0.4, resolved IN-SCOPE per SPEC-ENEMIES §5's spawner CFG
+block, which already carried hp/points/gems):** `playerShotEnemyPass` and
+`meleeExchange` (steps 3/4) now ALSO test `G.spawners` — a player bullet or
+melee hit reduces `sp.hp`, tagging `sp._cause`; spawners take no melee-to-
+player (no `CFG.ENEMY.spawner.melee` — the null case is structural, not a
+special-cased skip) and no crate-bumper knockback (they're immobile, nothing
+to push away from). A new `spawnerDeathSweep` (mirrors `deathSweep`, run
+immediately after it in step 5) drops gems/`awardKill`/emits `enemy:killed`
+{type:"spawner",...} and calls the loader's `markNavDirty` on the vacated tile
+(a destroyed spawner was a nav blocker; occupancy rebuilds lazily off
+`G.spawners`, so the invalidation signal alone is correct — no rebuild call
+needed here). Barrel/shrapnel destruction of spawners stays out of scope
+(SPEC-BARRELS, post-#4, per the phase prompt). `test-enemies-spawner.js` (28)
+green; suite **619 total**. **Subsystem #4 (Enemies + spawners) is now
+COMPLETE** — full roster (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton
+Shooter/Fire Wraith/Lobber/Reaper) + spawners, nav consumer layer, and combat
+spine all built and tested headlessly.)
+(SPEC-ENEMIES Phase 8 — **The Reaper added** (§6.1.9,
 E9): PHANTOM A\* mini-boss summoner. `updateReaper` (`enemies-ai.js`) registers as a
 nav navigator with `NAV_MASK.PHANTOM` + a **bespoke phantom mover** — the ONE
 navigator whose mover is NOT `world.moveBody` (a deliberate, documented exception to
@@ -29,7 +67,8 @@ melee knockback can't wedge it on a wall it phases through). `test-enemies-reape
 (24) green; suite **591 total**. Roster still owed: **spawners** only.)
 (SPEC-ENEMIES Phase 7 — **Lobber added** (§6.1.4, cover-seek, ADAPTS ADD `updateSorter`) + the `G.ebolts`/`updateEbolts` arced-ordnance system it is the sole producer of. `updateLobber` (`enemies-ai.js`) is **NOT an A\* navigator** — cover-seek via `moveBody`+`groundBlockerFilter` only, no `addNavigator`/`steerNavigator`, throttled LOS (`losCheckEvery` 0.12s, ADD). Exposed (`canSee`): panic-flee AWAY at `fleeMul(0.95×)` with an ADD-verbatim wandering-jitter angle, hold fire. In cover (`!canSee`): advance at `0.40×`, lob every `lobEvery(2.5s)` within `lobRange(9t)`. The lob is minted via a registered `registerLobberFire` seam (same register-callback shape as the Spider web/Shooter arrow, R6 — `enemies-ai.js` never imports `G.ebolts`) filled in `enemies.js`: pushes a `kind:"arc"` entry into `G.ebolts` (NOT a `Shot`/`G.shots` — E1) with `owner:"enemy"`, landing at the player's fire-time position **perturbed by a uniform-disc random offset within `G.ramp.lobberErrorRadius`** (net-new vs ADD's exact-target `fireEnemyArc` — sampled via `angle=rand·2π, radius=√rand·errR` for uniform area coverage, not center-biased). `updateEbolts` (`enemies.js`, replacing the Phase-3 no-op hook in step 7) is ADD `updateArc` ported near-verbatim: interpolates ground pos launch→landing over `dur(airtime 1.0s)`, parabolic `height` for the renderer, wall-agnostic in flight (never collides in transit); at `t≥dur` splats + AoE-tests the player ONLY at `blast(1.25t)+player.r` → `applyDamageToPlayer(2,"enemy-lob")` + the registered `detonateBarrelsInRadius` seam, then removes the entry. Self-contained in step 7 (not moved by `player.js`'s `updateShots` — arced ordnance is a distinct timed kind from a `Shot`, E1), so no cross-file frame-ordering assumption applies to it, unlike the straight-shot passes. `test-enemies-lobber.js` (15) green; suite **567 total**. Roster still owed: the Reaper and spawners.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
-incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
+incl. crates §7.1), #3 (Pathfinding), and #4 (Enemies + spawners) are BUILT and
+tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
 the A\* solver (`findPath`, Phase 2). Foundation (config/state/world) + the **loader** + the
 generator's **content half** (`level-plan.js`) + the generator's
@@ -190,7 +229,26 @@ current or the next session starts blind.
   `boss:killed` FX (screen-shake/hit-stop, keyed on `e.boss`);
   `integrateEnemyKnockback` gained a `nav==="phantom"` branch (Reaper knockback
   uses `phantomMover`, not `groundMover`). Tests: `test-enemies-reaper.js` (24,
-  green). Roster still owed: **spawners** only (E4).
+  green). **Phase 9 (Spawners) BUILT — roster + subsystem COMPLETE.**
+  `makeSpawner` (`enemies.js`) **decorates** the loader's existing spawner
+  placeholder via a new `getEntityFactory` accessor (`level-loader.js`) rather
+  than re-deriving the Plan-filtered `table`/ramped `interval`/`liveCap`
+  eligibility logic a second time; adds `hp`(6)/`points`(300)/`gems`(3)/`r`(16)
+  from `CFG.ENEMY.spawner`, a stable `id` (E4 tag source), and `emitT` seeded
+  at `firstDelay`(2.0s). `spawnerTick` (new step 1 of `tickEnemies`, replacing
+  the Phase-3 no-op) emits via `weightedPick` over the spawner's own
+  Plan-filtered `table`, minted through a `factoryByType` lookup over the 8
+  loose-element factories, tagged `originSpawner`, emerging through the shared
+  0.5s `spawn>0` gate. Live-cap is a **scan** of `G.enemies` for the matching
+  tag at the emit decision (no mutable counter, E4) with **no `spawn` filter**
+  on the scan — emergence-window children count toward the cap by construction
+  (R5). **Spawner-as-target (§0.4):** `playerShotEnemyPass`/`meleeExchange`
+  (steps 3/4) now also test `G.spawners` (bullet + melee damage; no
+  melee-to-player, no crate-bumper knockback — spawners are immobile); a new
+  `spawnerDeathSweep` (step 5, after `deathSweep`) drops gems/`awardKill`/emits
+  `enemy:killed`+calls `markNavDirty` on the vacated tile. Barrel/shrapnel
+  destruction of spawners stays out of scope (SPEC-BARRELS). Tests:
+  `test-enemies-spawner.js` (28, green).
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -226,22 +284,30 @@ but supplies `phantomMover` as its mover — the sole navigator not using
 factories: 7-step `tickEnemies` + player-shot/melee/death-sweep/`awardKill`/
 knockback/enemy-shot passes + `makeGhost`/`makeSkeleton`/`makeSpider`/
 `makeBat`/`makeZombie`/`makeSkeletonShooter`/`makeFireWraith`/`makeLobber`/
-`makeReaper`
+`makeReaper`/`makeSpawner`
 factories + the Spider web-fire, Shooter arrow-fire, and
 `fireWraithAI`/`explodeFireWraith` EXPLODE-resolution callbacks + the Lobber
 lob-fire seam (mints a `G.ebolts` `kind:"arc"` entry, error-radius perturbed) +
 the Reaper summon/blast seams (mint tagged minions capped at 6 / an enemy
-`makeShot` dark-blast) (imports `projectiles.js` `makeShot`); `updateEbolts`
+`makeShot` dark-blast) + `spawnerTick`/`spawnerEmit`/`weightedPick`/
+`factoryByType`/`spawnerDeathSweep` (Phase 9) (imports `projectiles.js`
+`makeShot`); `updateEbolts`
 (step 7) is the ADD
 `updateArc` port — launch→landing interpolation, wall-agnostic flight,
 player-only AoE on landing + barrel seam; `deathSweep` now calls
 `removeNavigator` for any `e.nav`-bearing enemy (Phase 5 fix) AND
 `removeLight` for any light-registered enemy (Phase 6, Wraith) AND emits
 `boss:killed` FX for `e.boss` (Phase 8, Reaper); `integrateEnemyKnockback` routes
-`nav==="phantom"` knockback through `phantomMover` (Phase 8); new
+`nav==="phantom"` knockback through `phantomMover` (Phase 8);
+`playerShotEnemyPass`/`meleeExchange` also test `G.spawners` (Phase 9, §0.4);
+new
 `registerBarrelDetonation` seam (no-op default, SPEC-BARRELS owed); imports
 config/state/world/player-sinks/level-loader/projectiles/enemies-ai, never
-imported back [R6]). Tests:
+imported back [R6]). `level-loader.js` gained `getEntityFactory(type)` (Phase
+9) — a read-back accessor so a later subsystem's factory can DECORATE the
+current registration instead of re-deriving its logic (used by `makeSpawner`
+to reuse the placeholder's eligibility-filtered `table`/ramped
+`interval`/`liveCap` computation). Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
 `test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
@@ -249,12 +315,12 @@ imported back [R6]). Tests:
 `test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66),
 `test-enemies-steer.js` (24), `test-enemies-ground.js` (15),
 `test-enemies-wraith.js` (16), `test-enemies-lobber.js` (15),
-`test-enemies-reaper.js` (24) —
-all green (**591 checks total**). Subsystems #1, #2, and #3 complete; #4
-(Enemies) has its foundation, nav consumer layer, combat spine, and all 9
-roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire
-Wraith/Lobber/Reaper)
-built; only spawners still pending.
+`test-enemies-reaper.js` (24), `test-enemies-spawner.js` (28) —
+all green (**619 checks total**). Subsystems #1, #2, #3, and #4 (Enemies +
+spawners) are all COMPLETE: nav consumer layer, combat spine, all 9 roster
+types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire
+Wraith/Lobber/Reaper), and spawners (emission + spawner-as-target) built and
+tested headlessly.
 
 ## Implementation sequencing (agreed order)
 
@@ -1943,3 +2009,39 @@ the event key; chosen to match the `noun:verb` convention and keyed on `e.boss`)
 `test-enemies-reaper.js` (24 checks, green); full suite **591 checks total**, all
 green. Roster (§6.1) is now COMPLETE — 9 of 9 built; only spawners (E4) remain in
 subsystem #4. No git.
+
+### 2026-07-05 — Spawners (§6.3, E4) + §0.4 spawner-as-target resolved IN-SCOPE — Phase 9 (SPEC-ENEMIES)
+Subsystem #4 (Enemies + spawners) is now **fully complete**. Two mechanical
+decisions worth recording (neither is new design — both are seam-filling per
+the phase prompt):
+
+- **`level-loader.js` gained `getEntityFactory(type)` (new export).** The
+  loader's spawner placeholder (`mkPlaceholder(true, ...)`, registered at
+  module load) already computes the Plan-filtered `table` and the ramped
+  `interval`/`liveCap` — nontrivial eligibility logic. Rather than have
+  `enemies.js`'s `makeSpawner` re-derive that a second time (the exact
+  duplication hazard the `evalRampTable` decision log entry above already
+  flagged and rejected for `level-generator.js`), `getEntityFactory` reads back
+  the loader's CURRENT registration so `makeSpawner` can call through it and
+  then decorate the result with combat/emission fields. This is the same
+  "decorate, don't duplicate" instinct as the reaper/ghost/etc. factories that
+  *replace* trivial placeholders — spawners just need to *wrap* instead,
+  because their placeholder isn't trivial.
+- **§0.4 (spawner-as-target) resolved IN-SCOPE.** The phase prompt flagged this
+  for a confirm-before-building check, but SPEC-ENEMIES §5's `CFG.ENEMY.spawner`
+  block already ships concrete `hp:6, points:300, gems:3, r:16` — data that
+  only makes sense if spawners take damage and die through the ordinary
+  gems/awardKill/`enemy:killed` path. Built as specified: `playerShotEnemyPass`/
+  `meleeExchange` (steps 3/4) test `G.spawners` alongside `G.enemies`, and a new
+  `spawnerDeathSweep` (step 5, immediately after `deathSweep`) mirrors the enemy
+  death sweep and additionally calls `markNavDirty` on the vacated tile (a
+  destroyed spawner was a nav blocker — occupancy rebuilds lazily off
+  `G.spawners`, so the invalidation signal is sufficient, no manual rebuild).
+  Spawners have no `melee` stat (never deal damage to the player) and are
+  excluded from the crate-bumper knockback (nothing to push — they're
+  immobile), both structural (absence of a stat / a static `r`-only check),
+  not special-cased skips. Barrel/shrapnel destruction of spawners is
+  confirmed out of scope (SPEC-BARRELS, post-#4), matching the prompt.
+
+`test-enemies-spawner.js` (28 checks, green); full suite **619 checks total**,
+all green. **Subsystem #4 (Enemies + spawners) is now fully COMPLETE.** No git.

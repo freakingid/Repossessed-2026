@@ -35,7 +35,7 @@ import { tileCenter } from "./world.js";
 import {
   applyDamageToPlayer, applyKnockbackToPlayer, applyEntangle, isCarryingCrate,
 } from "./player.js";
-import { emit, registerEntityFactory } from "./level-loader.js";
+import { emit, registerEntityFactory, getEntityFactory, markNavDirty } from "./level-loader.js";
 import { makeShot } from "./projectiles.js";
 import {
   scheduleRepaths, groundMover, phantomMover, updateGhost, updateSkeleton, updateSpider,
@@ -258,6 +258,101 @@ export function makeFireWraith(p) {
 }
 registerEntityFactory("fireWraith", makeFireWraith);
 
+// Stable per-spawner id — spawned children are tagged originSpawner = this id,
+// and the live-cap scan (E4) matches on it (same chain-of-custody shape as the
+// Reaper's minion tag). Monotonic; unique per placed spawner.
+let nextSpawnerId = 1;
+
+// The spawner (§6.3, E4/R5, §0.4 spawner-as-target) — DECORATES rather than
+// replaces the loader's placeholder factory (level-loader.js mkPlaceholder(true,
+// ...)), which already computes { type, x, y, tc, blocks:true, variant, table,
+// interval, liveCap } (the Plan-filtered table + ramped interval/liveCap the
+// eligibility logic that would be a correctness hazard to re-derive here, per
+// the evalRampTable precedent in STATUS's decision log). getEntityFactory reads
+// back that CURRENT registration (still the loader's at this point in module
+// load) and this factory calls through it, then adds the combat/emission
+// fields spawners need to act as destructible, emitting statics: hp/points/
+// gems from CFG.ENEMY.spawner (§0.4 — hp 6/300 pts/3 gems, same death-sweep
+// path as any other enemy), a stable `id` for the live-cap tag, and `emitT`
+// seeded at `firstDelay` (2 s) so the first emit fires 2 s after level start
+// (E4) rather than immediately.
+const loaderSpawnerFactory = getEntityFactory("spawner");
+function makeSpawner(p) {
+  const e = loaderSpawnerFactory(p);
+  const cfg = CFG.ENEMY.spawner;
+  e.id = nextSpawnerId++;
+  e.hp = cfg.hp;
+  e.points = cfg.points;
+  e.gems = cfg.gems;
+  e.r = cfg.r;
+  e.emitT = cfg.firstDelay;
+  return e;
+}
+registerEntityFactory("spawner", makeSpawner);
+
+// Factory lookup for spawner emission (E4) — the 8 loose element types a
+// spawner's Plan-filtered table can name (never "reaper", never "spawner"
+// itself — reaper is level-def-only, §6.1.9). Built after every factory above
+// is defined so the map is complete at first use.
+const factoryByType = new Map([
+  ["ghost", makeGhost], ["skeleton", makeSkeleton], ["spider", makeSpider],
+  ["bat", makeBat], ["zombie", makeZombie],
+  ["skeletonShooter", makeSkeletonShooter], ["lobber", makeLobber],
+  ["fireWraith", makeFireWraith],
+]);
+
+// Weighted pick (E4) — table is { type: weight, ... } (already Plan-filtered
+// on the placeholder, so a Night-2 Bone Pile only ever offers "skeleton" until
+// Shooters unlock). Empty table (nothing eligible yet) → null, no emit.
+function weightedPick(table) {
+  const entries = Object.entries(table);
+  if (entries.length === 0) return null;
+  let total = 0;
+  for (const [, w] of entries) total += w;
+  let r = Math.random() * total;
+  for (const [type, w] of entries) {
+    r -= w;
+    if (r <= 0) return type;
+  }
+  return entries[entries.length - 1][0];
+}
+
+// Step 1 (§6.3, E4) — spawner emission. First emit at `firstDelay` (2 s) after
+// level start, then every `e.interval` (both ramped onto the placeholder by
+// the loader, E10 — read once, never mid-level). A spawner may emit only while
+// its live TAGGED children (originSpawner === e.id) < e.liveCap; the count is
+// a SCAN of G.enemies at the emit decision (no mutable counter to desync on
+// child death, E4) that counts children still in their spawn>0 emergence
+// window (R5 — otherwise a spawner over-spawns in the first 0.5 s because an
+// emerging child doesn't "look" alive to a naive filter). A newly-spawned
+// child appears with the shared 0.5 s emergence telegraph (spawner.emerge),
+// reusing the existing spawn>0 grow-in gate (step 6 skips it until spawn≤0).
+function spawnerEmit(sp) {
+  let live = 0;
+  for (const en of G.enemies) if (en.originSpawner === sp.id) live++;
+  if (live >= sp.liveCap) return;
+  const type = weightedPick(sp.table);
+  if (!type) return;
+  const make = factoryByType.get(type);
+  if (!make) return;
+  const tx = (sp.x / CFG.TILE) | 0, ty = (sp.y / CFG.TILE) | 0;
+  const child = make({ type, x: tx, y: ty, originSpawner: sp.id });
+  child.spawn = CFG.ENEMY.spawner.emerge;   // 0.5 s emergence gate (E4)
+  G.enemies.push(child);
+}
+
+function spawnerTick(dt) {
+  const spawners = G.spawners;
+  if (!spawners) return;
+  for (const sp of spawners) {
+    sp.emitT -= dt;
+    if (sp.emitT <= 0) {
+      spawnerEmit(sp);
+      sp.emitT = sp.interval;
+    }
+  }
+}
+
 /* =========================================================================
    THE SPINE
    ========================================================================= */
@@ -311,23 +406,40 @@ function clearMeleePair(e) {
 // circle-vs-circle tested against every (non-emerging) enemy; on hit e.hp -=
 // s.dmg and the shot is CONSUMED (Q2: a Bounce shot is consumed on enemy hit
 // like any other — Bounce is a wall ricochet, not a pierce). A lethal hit tags
-// the enemy's cause for the death sweep.
+// the enemy's cause for the death sweep. Also tests G.spawners (§0.4,
+// spawner-as-target) — spawners are tile-aligned statics with no `spawn` gate
+// (they're never mid-emergence themselves), so no emergence check applies.
 function playerShotEnemyPass() {
-  const shots = G.shots, enemies = G.enemies;
-  if (!shots || !enemies) return;
+  const shots = G.shots, enemies = G.enemies, spawners = G.spawners;
+  if (!shots) return;
   for (let i = shots.length - 1; i >= 0; i--) {
     const s = shots[i];
     if (s.owner !== "player") continue;
-    for (const e of enemies) {
-      if (e.spawn > 0) continue;                 // emerging enemies don't collide (E4)
-      const dx = s.x - e.x, dy = s.y - e.y;
-      const rr = s.r + e.r;
-      if (dx * dx + dy * dy > rr * rr) continue;
-      e.hp -= s.dmg;
-      if (e.hp <= 0) e._cause = "player-bullet";
-      shots.splice(i, 1);                        // consumed on enemy hit (Q2)
-      break;                                     // shot gone — stop testing enemies
+    let hit = false;
+    if (enemies) {
+      for (const e of enemies) {
+        if (e.spawn > 0) continue;                 // emerging enemies don't collide (E4)
+        const dx = s.x - e.x, dy = s.y - e.y;
+        const rr = s.r + e.r;
+        if (dx * dx + dy * dy > rr * rr) continue;
+        e.hp -= s.dmg;
+        if (e.hp <= 0) e._cause = "player-bullet";
+        hit = true;
+        break;
+      }
     }
+    if (!hit && spawners) {
+      for (const sp of spawners) {
+        const dx = s.x - sp.x, dy = s.y - sp.y;
+        const rr = s.r + sp.r;
+        if (dx * dx + dy * dy > rr * rr) continue;
+        sp.hp -= s.dmg;
+        if (sp.hp <= 0) sp._cause = "player-bullet";
+        hit = true;
+        break;
+      }
+    }
+    if (hit) shots.splice(i, 1);                   // consumed on hit (Q2)
   }
 }
 
@@ -339,9 +451,9 @@ function playerShotEnemyPass() {
 // Bats deal melee 2 on contact but ignore the crate bumper (they fly over).
 function meleeExchange() {
   const p = G.player, enemies = G.enemies;
-  if (!p || !enemies || p.loco === "DEAD") return;
+  if (!p || p.loco === "DEAD") return;
   const carrying = isCarryingCrate();
-  for (const e of enemies) {
+  if (enemies) for (const e of enemies) {
     if (e.spawn > 0) continue;                   // emerging enemies don't collide (E4)
     const dx = e.x - p.x, dy = e.y - p.y;        // player → enemy
     const dist = Math.hypot(dx, dy);
@@ -366,6 +478,17 @@ function meleeExchange() {
       meleeSet().add(e);
       if (e.hp <= 0 && !e._cause) e._cause = "player-melee";
     }
+  }
+  // Spawners (§0.4, spawner-as-target) — tile-aligned statics: player melee
+  // damages them on contact, but they never move, never deal melee back, and
+  // never take the crate-bumper push (there's nothing to push away from — the
+  // spawner is immobile terrain, not a steered enemy).
+  const spawners = G.spawners;
+  if (spawners) for (const sp of spawners) {
+    const dx = sp.x - p.x, dy = sp.y - p.y;
+    if (Math.hypot(dx, dy) > sp.r + p.r) continue;
+    sp.hp -= CFG.PLAYER.meleeDamageToEnemy;
+    if (sp.hp <= 0 && !sp._cause) sp._cause = "player-melee";
   }
 }
 
@@ -407,6 +530,27 @@ function deathSweep() {
     if (e.nav) removeNavigator(e);   // drop the A* registry entry (Zombie/Shooter/Wraith/Reaper)
     removeLight(e);
     enemies.splice(i, 1);
+  }
+}
+
+// Spawner death sweep (§0.4, mirrors §6.3) — same gems/awardKill/emit shape as
+// the enemy death sweep, plus markNavDirty (a destroyed spawner was a nav
+// blocker — SPEC-PATHFINDING's occupancy rebuilds lazily off G.spawners, so
+// clearing the tile just needs the invalidation signal, not a rebuild here).
+// No removeNavigator/removeLight — spawners never register either (static,
+// non-A*, no light-emitter seam).
+function spawnerDeathSweep() {
+  const spawners = G.spawners;
+  if (!spawners) return;
+  for (let i = spawners.length - 1; i >= 0; i--) {
+    const sp = spawners[i];
+    if (sp.hp > 0) continue;
+    const cause = sp._cause || "unknown";
+    dropGems(sp);
+    awardKill(sp, cause);
+    emit("enemy:killed", { type: "spawner", x: sp.x, y: sp.y, points: sp.points, cause });
+    markNavDirty({ tx: (sp.x / CFG.TILE) | 0, ty: (sp.y / CFG.TILE) | 0 });
+    spawners.splice(i, 1);
   }
 }
 
@@ -542,17 +686,19 @@ function enemyShotPlayerPass() {
 /* ---- tickEnemies: the 7-step contract (§3.5, E11) ----------------------- */
 export function tickEnemies(dt) {
   const player = G.player;
-  // 1. spawners emit — Phase 4. Hook left as a no-op; new enemies would start
+  // 1. spawners emit (§6.3, E4) — may append to G.enemies; new ones start
   //    with spawn>0 (emergence telegraph).
-  //    (spawnerTick(dt) — not built)
+  spawnerTick(dt);
   // 2. nav scheduler tick (drains consumeDirtyTiles once; repaths A* navigators).
   scheduleRepaths(player, dt);
-  // 3. player-shot → enemy damage pass (marks hp; tags deaths).
+  // 3. player-shot → enemy damage pass (marks hp; tags deaths). Also tests
+  //    G.spawners (§0.4 spawner-as-target).
   playerShotEnemyPass();
-  // 4. melee exchange.
+  // 4. melee exchange. Also tests G.spawners (§0.4).
   meleeExchange();
   // 5. death sweep (a mid-FLASH Wraith removed here is DEFUSED — R2/E11).
   deathSweep();
+  spawnerDeathSweep();   // §0.4 — same shape, separate array
   // 6. enemy AI tick over survivors (a surviving Wraith EXPLODEs HERE, Phase 6).
   enemyAITick(dt);
   // 7. ordnance update: arced lobs + the enemy-shot → player hit-test.
@@ -571,4 +717,6 @@ export {
   deathSweep as __deathSweep,
   enemyAITick as __enemyAITick,
   enemyShotPlayerPass as __enemyShotPlayerPass,
+  spawnerTick as __spawnerTick,
+  spawnerDeathSweep as __spawnerDeathSweep,
 };

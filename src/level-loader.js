@@ -59,6 +59,11 @@ export function emit(type, payload) { if (emitFn) emitFn(type, payload); }
    Tile-keyed lookups (nav-dirty, plate press) derive the tile via (x/TILE)|0. */
 const entityFactories = new Map();
 export function registerEntityFactory(type, fn) { entityFactories.set(type, fn); }
+// Wrap-and-override accessor (SPEC-ENEMIES §0.4): lets a later subsystem's
+// factory decorate the CURRENT registration (e.g. #4's spawner factory needs
+// the placeholder's already-computed variant/table/interval/liveCap, not a
+// second copy of the eligibility-filtering logic) rather than duplicating it.
+export function getEntityFactory(type) { return entityFactories.get(type); }
 
 // Which G array each placed entity type is pushed onto.
 const ENTITY_ARRAY = {
