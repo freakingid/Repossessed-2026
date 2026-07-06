@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 1 — `CFG.ENEMY`/`CFG.GEM` data added; three shipped-file seam edits: `projectiles.js` maxTravel/effect, `player.js` applyEntangle sink, `level-loader.js` ENTITY_ARRAY 8-loose-type extension + `G.ebolts`. Foundation only, no AI/combat built yet — subsystem #4 not flipped.)
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 2 — **`enemies-ai.js` created: the nav consumer layer** over pure `nav.js` — repath scheduler + round-robin budget + waypoint steering + direct-steer fallback (SPEC-ENEMIES §3). Single-consumer ownership of `consumeDirtyTiles` (R1) and the one-way `enemies-ai → {nav, world}` import flow (R6) recorded below. `test-enemies-nav.js` (24) green; suite 431 total. `enemies.js` roster/AI/combat still not started.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
 incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
@@ -51,17 +51,30 @@ current or the next session starts blind.
   mask), `1e9` gScore sentinel (D6), total-order tie-break f→h→packed-key (D7);
   returns start-exclusive/goal-inclusive `{tx,ty,x,y}` waypoints, `[]` when
   start tile === goal tile, `null` when the goal is blocked or unreachable.
-  **Owed by #4:** repath scheduler / round-robin / waypoint steering /
-  direct-steer fallback (pending Q1 sign-off — Shape 1 baselined); `installNav()`
-  wiring into game startup (later integration phase); barrel-destruction
-  `markNavDirty` (SPEC-BARRELS).
-- [ ] §6 Enemies + spawners — **Phase 1 (foundation) done:** `CFG.ENEMY`/`CFG.GEM`
-  added to `config.js`; `enemies.js` itself not started. Three shipped-file seam
-  edits landed (see Session log below): `projectiles.js` (`makeShot` maxTravel/
-  effect + `updateShots` expiry reads `s.maxTravel ?? CFG.SHOT.range`),
-  `player.js` (`applyEntangle` sink), `level-loader.js` (`ENTITY_ARRAY` now
-  routes the 8 loose enemy types to `"enemies"`; `clearTransient` resets
-  `G.ebolts`).
+  **Owed by #4 — repath scheduler / round-robin / waypoint steering /
+  direct-steer fallback: BUILT** in `enemies-ai.js` (nav consumer layer, see §6
+  box + Decision log 2026-07-05). Still owed: `installNav()` wiring into game
+  startup (later integration phase); barrel-destruction `markNavDirty`
+  (SPEC-BARRELS).
+- [ ] §6 Enemies + spawners — **Phase 1 (foundation) done + Phase 2 (nav
+  consumer layer) done:** `CFG.ENEMY`/`CFG.GEM` added to `config.js`; three
+  shipped-file seam edits landed (`projectiles.js` `makeShot` maxTravel/effect +
+  `updateShots` expiry reads `s.maxTravel ?? CFG.SHOT.range`; `player.js`
+  `applyEntangle` sink; `level-loader.js` `ENTITY_ARRAY` routes the 8 loose enemy
+  types to `"enemies"` + `clearTransient` resets `G.ebolts`). **`enemies-ai.js`
+  BUILT** — the nav consumer layer over the pure `nav.js` service (SPEC-ENEMIES
+  §3, E2/E3, R1, R6): per-navigator nav sub-block + registry (`addNavigator`/
+  `removeNavigator`/`clearNavigators`); repath scheduling (§3.1 eligibility:
+  repathTimer floor AND goal-tile-changed OR dirty-path OR no-live-path);
+  round-robin budget (§3.2 rotating cursor, ≤`repathBudgetPerFrame` findPath/
+  frame, unserviced keep prior path + are first next frame); the once-per-tick
+  dirty gate (§3.5 step 2 — **sole consumer of `consumeDirtyTiles`**, R1);
+  waypoint-follow steering (§3.3 arriveDist/wpTimeout advance, face toward wp);
+  direct-steer fallback (§3.4 `null`→aim-at-player, `[]`→sub-tile approach). Mask
+  + mover are **navigator-supplied** so the layer is GROUND/PHANTOM-agnostic;
+  `groundMover`/`groundBlockerFilter` provided as the GROUND binding. `enemies.js`
+  itself (roster + per-type AI + combat) still not started. Tests:
+  `test-enemies-nav.js` (24, green).
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -80,12 +93,17 @@ re-adds `moveBody` (2-source, filtered) + `bodyHitsBlocker`; now imports
 COMPLETE: `NAV_MASK`, `isNavBlocked`, `getNavVersion`, `consumeDirtyTiles`,
 `installNav` [Phase 1] + `findPath` grid A\* [Phase 2 — 8-dir, octile, per-mask
 corner-cut, deterministic]; imports config/state/world/level-loader only, leaf
-w.r.t. gameplay). Tests: `test-config.js` (19),
-`test-world.js` (35), `test-level-loader.js` (40), `test-level-content.js` (79),
+w.r.t. gameplay). `enemies-ai.js` (**new** — SPEC-ENEMIES Phase 2, the nav
+consumer layer: registry + repath scheduler + round-robin budget + dirty gate +
+waypoint steering + direct-steer fallback; imports config/world/nav only, sole
+consumer of `consumeDirtyTiles` [R1], never imported back [R6]). Tests:
+`test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
+`test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
 `test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
-`test-nav.js` (36) — all green (**389 checks total**). Subsystems #1, #2, and
-#3 complete (SPEC-PLAYER Phases 1–7 + SPEC-PATHFINDING Phases 1–2 all done).
+`test-nav.js` (36), `test-enemies-nav.js` (24) — all green (**431 checks
+total**). Subsystems #1, #2, and #3 complete; #4 (Enemies) has its foundation
+(config/seams) + nav consumer layer built, roster/AI/combat pending.
 Next subsystem is #4 (Enemies + spawners), which owns the repath cadence,
 round-robin budget, waypoint steering, and direct-steer fallback over `nav.js`
 (pending Q1 sign-off — Shape 1 baselined).
@@ -527,6 +545,47 @@ uses `rapid` (not `fast`) and `G.shots.length` (not owner-scoped) — both
 intentional Repossessed divergences (Fast substitutes ADD's Rapid; cap is
 owner-scoped), applied as flagged, not papered over. No conflict surfaced against
 the local `state.js` contract.
+
+### 2026-07-05 — `enemies-ai.js` nav consumer layer: single-consumer + one-way import — Phase 2 (SPEC-ENEMIES)
+The nav consumer layer (repath scheduler / round-robin budget / waypoint steering /
+direct-steer fallback) is built as **`enemies-ai.js`**, a thin layer over the pure
+`nav.js` service. `nav.js` was **not** touched (no scheduling added to it — per the
+phase constraint). Load-bearing decisions:
+- **R1 — `consumeDirtyTiles()` is single-consumer; `enemies-ai.js` OWNS it.** The
+  dirty gate (`applyDirtyGate`, called once inside `scheduleRepaths`) drains it
+  **exactly once per tick**, gated on a `getNavVersion()` change. Because
+  `consumeDirtyTiles` clears-on-read, any second consumer would silently lose
+  dirtied tiles and crate barricades would stop re-routing. An explicit ownership
+  comment marks this in `enemies-ai.js`; the R1 test asserts two ticks in one
+  frame drain once (the second sees empty) and an external drain after scheduling
+  finds nothing.
+- **Dirty-hit is a STICKY per-navigator flag** (`nav.dirtyHit`), set by the gate
+  when a drained tile intersects the navigator's `pathTiles`, cleared only on the
+  navigator's next actual repath. This is required because the dirty Set is drained
+  once per frame but a force-eligible navigator may be **budget-starved** that
+  frame — the sticky flag survives to its next slot even though the Set is already
+  empty. `nav.dirtyHit` is an internal field on the §2 nav sub-block.
+- **R6 — one-way import flow.** `enemies-ai.js` imports **config / world / nav**
+  only right now (the allowed set also permits `state` and, later, `projectiles`
+  `makeShot`). It is **never** imported by `nav.js` / `player.js` / `projectiles.js`
+  (grep-asserted both directions in `test-enemies-nav.js`). Flow is
+  `enemies-ai → {nav, world}`, never back.
+- **Layer is mask/mover-agnostic (keeps GROUND vs the Reaper's PHANTOM mover out
+  of the layer).** A navigator supplies its `mask` (GROUND/PHANTOM, for `findPath`)
+  and a `mover(e,dx,dy)` (the class-appropriate `moveBody`+filter). The layer
+  computes the displacement magnitude from `e.speed` (treated as **effective**
+  px/s — ramp application stays the caller's job per E10, so this layer never
+  double-applies `G.ramp.enemySpeedMult`). `groundMover`/`groundBlockerFilter`
+  (crates+barrels+spawners all block, §4) are exported as the GROUND binding;
+  the Reaper's crates+barrels-only PHANTOM mover (R4 — must NOT use `bodyHitsWall`)
+  is owed by `enemies.js`, not built here.
+- **R9 upheld:** `arriveDist`(9)/`wpTimeout`(5) read straight from `CFG.ENEMY` as
+  px / s — never re-multiplied by `TILE` (the waypoint `x,y` is already a pixel
+  tile-center).
+- **Test seam:** `__getRepathCount`/`__resetRepathCount` count `findPath`
+  invocations (one per repath) for the budget/R1 tests; `__rebuildPathTiles(e)`
+  lets a headless test synthesise a path and its dirty-intersection set without a
+  live `findPath`. All `__`-prefixed, clearly test-only.
 
 ## Known open items (non-blocking for build)
 
@@ -1142,3 +1201,55 @@ was written to expect that, not to paper over it. **Owed by later Phase(s) of
 exchange loop, death/gem/score sweep) — nothing in this phase built any
 behavior, only the data + seam surface it will read. §6 build-status box
 correctly NOT flipped to BUILT. No git.
+
+### 2026-07-05 — SPEC-ENEMIES Phase 2 (`enemies-ai.js` — nav consumer layer)
+
+Built `src/enemies-ai.js` (~7KB, one concern — the scheduling/steering layer
+between pure `nav.js` and the four A* enemy classes) + `test-enemies-nav.js`
+(24 checks green). No roster, no combat, no per-type AI — only the substrate
+the Skeleton Shooter / Zombie / Fire Wraith / Reaper will sit on. `nav.js` was
+**not** modified (the phase's hard constraint — no scheduling in nav).
+
+Implements (SPEC-ENEMIES §3):
+- **Navigator registry + nav sub-block (§2):** `addNavigator(e, mask, mover)` /
+  `removeNavigator(e)` / `clearNavigators()`; `initNav` seeds
+  `path/wpIndex/wpTimer/repathTimer/goalTile/pathTiles(+dirtyHit)`.
+- **Repath scheduling (§3.1):** eligibility = `repathTimer ≤ 0` **AND**
+  (goal-tile-changed **OR** `dirtyHit` **OR** no-live-path); on repath, call
+  `findPath(e.x,e.y,player.x,player.y,mask)`, reset waypoint/goal state, rebuild
+  `pathTiles`, set `repathTimer = repathMinInterval`.
+- **Round-robin budget (§3.2):** `scheduleRepaths(player, dt)` decrements every
+  floor, runs the dirty gate once, then walks a rotating `cursor` servicing up to
+  `CFG.ENEMY.repathBudgetPerFrame` eligible navigators, advancing the cursor past
+  the last serviced. Unserviced-but-eligible keep their existing path this frame.
+- **Dirty gate (§3.5 step 2, E3, R1):** once per tick, gated on `getNavVersion()`
+  change, drain `consumeDirtyTiles()` **exactly once** and set the sticky
+  `dirtyHit` on any navigator whose `pathTiles` crosses a drained tile.
+- **Steering + fallback (§3.3/§3.4):** `steerNavigator(e, player, dt)` follows
+  `path[wpIndex]` (advance on `dist ≤ arriveDist` OR `wpTimer ≤ 0`; face toward
+  the waypoint); `null` path → direct-steer at the player, `[]` path → sub-tile
+  approach to the player pixel.
+
+Decisions surfaced & logged under Decision log above: **R1 single-consumer
+ownership** of `consumeDirtyTiles` (+ the sticky `dirtyHit` rationale for the
+budget-starved case), **R6 one-way import flow**, the **mask/mover-agnostic**
+parameterization (+ the `e.speed`-is-effective / no-double-ramp contract, E10),
+and R9 (arriveDist/wpTimeout are px/s, not re-multiplied by TILE).
+
+Tests (`test-enemies-nav.js`, 24, green) cover the SPEC-ENEMIES §9 nav-consumer
+items: corridor monotonic `wpIndex` advance; `wpTimeout` advancing a wedged
+navigator (and it never moved); `null`→direct-steer reduces player distance +
+faces the player; `[]`→steers to the pixel goal; round-robin budget (≤budget
+`findPath`/frame via the repath-count seam, all N serviced within ⌈N/budget⌉
+frames, unserviced keep prior path identity); E3 dirty-repath (only the crossed
+navigator repaths, `dirtyHit` cleared on repath); R1 single-consumer (two ticks
+one frame drain once, external drain after is empty); R6 import discipline both
+directions + no literal `Infinity`. Full suite green — **431 checks total**.
+
+**No spec gaps requiring invented design.** The `e.speed`-as-effective /
+ramp-stays-with-caller contract is a mechanical seam choice (documented, avoids
+double-applying `G.ramp.enemySpeedMult` in a layer that isn't the "one place"),
+not new tuning. Owed by the next Phase of #4: `enemies.js` (roster + per-type AI
++ combat), which will bind real `mask`/`mover` per class (incl. the Reaper's
+crates+barrels-only PHANTOM mover, R4) and drive `scheduleRepaths` +
+`steerNavigator` from `tickEnemies`. No git.
