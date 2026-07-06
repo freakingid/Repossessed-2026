@@ -2842,3 +2842,55 @@ the phase prompt):
 
 `test-enemies-spawner.js` (28 checks, green); full suite **619 checks total**,
 all green. **Subsystem #4 (Enemies + spawners) is now fully COMPLETE.** No git.
+
+### 2026-07-06 — SPEC-PICKUPS signed off (OQ-P1 transient, OQ-P2 deferred)
+Collection-side spec for GDD §3 (power-ups & pickups) authored + committed at repo
+root as `SPEC-PICKUPS.md`. Owns contact collection for everything in `G.pickups`
+(gems, food, treasure, keys, weapon power-ups, Magnet), the Magnet pull/duration/
+refresh, the gem despawn clock, placeholder→value decoration, and the new `CFG`
+value tables. Placement/routing (#1), the key-spend/door side, and Nova/Lightning
+are NOT touched — only `addGemEnergy` is called into.
+
+- **OQ-P1 — Magnet persistence: RULED TRANSIENT.** `G.magnet` (seconds remaining)
+  resets on every level load — one line `G.magnet = 0;` in `level-loader.js`
+  `clearTransient`, beside the existing `G.novas = []`. It's a ticking clock (like
+  Nova/Lightning cooldowns) and its target set (gems in `G.pickups`) is itself
+  cleared on load; a surviving timer would burn over a gem-less level opening. No
+  `state.js`/`G`-shape edit; never serialized. (SPEC-PICKUPS §11, §1, §2.1)
+- **OQ-P2 — gem scatter (§3.5): RULED DEFERRED.** Gems land at the death point as
+  `dropGems` already produces them; despawn + Magnet work regardless. Scatter
+  revisited later as a one-line `dropGems` touch (enemies.js) or render-side jitter
+  (#7). `dropGems` stays untouched. (SPEC-PICKUPS §5, §11)
+- **Edit surface for the build (sign-off-first):** NEW `src/pickups.js` (the whole
+  module); `config.js` additive only — `CFG.PICKUP` (`grab 0.5t`, `gemDespawn 12s`,
+  `powerupShots 75`, `magnet {radius 6t, pullSpeed 10t/s, duration 10s}`),
+  `CFG.FOOD {candy 5, feast 10}`, `CFG.TREASURE {candyCorn 100, silverSkull 250,
+  goldChest 500}`; one `clearTransient` line (`G.magnet = 0`). **No edit to
+  enemies.js / player.js / abilities.js / world.js** — sinks are imported, not
+  modified. Clean DAG leaf (nothing imports pickups.js); no circular-import hazard.
+  (SPEC-PICKUPS §1, §2)
+- **The one previously-unbuilt sink: weapon-power-up GRANT.** The fire hook already
+  CONSUMES `G.powerups.{triple,big,fast,bounce}`; nothing granted them. Collect adds
+  `+CFG.PICKUP.powerupShots` (=75); the `powerup` kind branches so `magnet` sets the
+  timer instead of a phantom shot counter. All other sinks pre-exist:
+  `addGemEnergy(value)` (gem), `healPlayer(heal)` clamped to `overhealCap 30` (food),
+  `G.score += points` (treasure), `G.keys++` (key). (SPEC-PICKUPS §1 D3–D5)
+- **Gem despawn lazy-seeded collection-side** so `dropGems` stays byte-for-byte
+  untouched: `updatePickups` inits `gem.life=0` on first sight, ages it, splices at
+  `≥12s` — the SPEC-BARRELS §5.2 shrapnel life/lifespan pattern, seeded lazily
+  instead of at creation. Only gems despawn; placed pickups persist until collected.
+  (SPEC-PICKUPS §4, §5)
+- **ADD provenance verified against live add2026 source** (codeload `main`): §3.1 —
+  `config.js POWERUP_SHOTS:75` + the `3+3·Rapid+3·Triple` formula REUSED verbatim
+  (Fast←Rapid); **Big Shot DIVERGED — Repossessed-original, no ADD equivalent** (ADD
+  ships only Rapid/Triple/Bounce); Fast ADAPTED (Rapid renamed, 4/s base vs ADD).
+  §3.3 — `vending.js` small+5/large+10 values REUSED verbatim; overheal-to-30
+  DIVERGED (ADD vending caps at maxHp; Repossessed food overheals via `healPlayer`'s
+  clamp — the sink owns it). (SPEC-PICKUPS §10)
+- **Integration debt (NOT pickups scope):** boot `import "./pickups.js"` + wiring
+  `updatePickups(dt)` into the main loop — same debt owed for `abilities.js`/
+  `barrels.js`. Phased prompts build + headless-test the module; loop wiring is the
+  later integration pass.
+
+Next: fresh conversational session generates the phased `pickups.js` Claude Code
+prompts from the spec. No implementation this session.
