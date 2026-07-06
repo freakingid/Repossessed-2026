@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 2 — **`enemies-ai.js` created: the nav consumer layer** over pure `nav.js` — repath scheduler + round-robin budget + waypoint steering + direct-steer fallback (SPEC-ENEMIES §3). Single-consumer ownership of `consumeDirtyTiles` (R1) and the one-way `enemies-ai → {nav, world}` import flow (R6) recorded below. `test-enemies-nav.js` (24) green; suite 431 total. `enemies.js` roster/AI/combat still not started.)
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 3 — **`enemies.js` created: the combat spine + the 7-step `tickEnemies` frame order** (§3.5/E11) proven end-to-end with the Ghost. Player-shot→enemy pass (§6.5, Q2 baked-in), melee exchange (§6.2, E6: pair-lockout + crate bumper + bat exemption + melee null-guard), death sweep + `awardKill` seam (§6.3, E8: gems always, score attribution-gated, Q3 baked-in), shared enemy knockback (§6.6), enemy-shot→player hit-test (§6.4, R3). `updateGhost` added to `enemies-ai.js` (§6.1.1). One-way import flow (R6) + the death-sweep-before-AI invariant (R2) recorded below. `test-enemies-combat.js` (66) green; suite **497 total**. Roster beyond the Ghost + spawners + arced ordnance still pending later phases.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
 incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
@@ -72,9 +72,15 @@ current or the next session starts blind.
   waypoint-follow steering (§3.3 arriveDist/wpTimeout advance, face toward wp);
   direct-steer fallback (§3.4 `null`→aim-at-player, `[]`→sub-tile approach). Mask
   + mover are **navigator-supplied** so the layer is GROUND/PHANTOM-agnostic;
-  `groundMover`/`groundBlockerFilter` provided as the GROUND binding. `enemies.js`
-  itself (roster + per-type AI + combat) still not started. Tests:
-  `test-enemies-nav.js` (24, green).
+  `groundMover`/`groundBlockerFilter` provided as the GROUND binding. `updateGhost`
+  added here (§6.1.1 — direct steer, no avoidance/repath, per-axis slide only).
+  Tests: `test-enemies-nav.js` (24, green). **Phase 3 (combat spine) BUILT** —
+  `enemies.js`: the 7-step `tickEnemies` order (§3.5/E11); player-shot→enemy pass
+  (§6.5), melee exchange (§6.2/E6), death sweep + `awardKill` (§6.3/E8), shared
+  knockback (§6.6), enemy-shot→player (§6.4), Ghost factory (§6.1.1). Roster
+  beyond the Ghost, spawners (E4), arced ordnance/`updateEbolts` (E1), the four A*
+  types' registration, and the Reaper PHANTOM mover (R4) still pending later
+  phases. Tests: `test-enemies-combat.js` (66, green).
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -95,15 +101,20 @@ COMPLETE: `NAV_MASK`, `isNavBlocked`, `getNavVersion`, `consumeDirtyTiles`,
 corner-cut, deterministic]; imports config/state/world/level-loader only, leaf
 w.r.t. gameplay). `enemies-ai.js` (**new** — SPEC-ENEMIES Phase 2, the nav
 consumer layer: registry + repath scheduler + round-robin budget + dirty gate +
-waypoint steering + direct-steer fallback; imports config/world/nav only, sole
-consumer of `consumeDirtyTiles` [R1], never imported back [R6]). Tests:
+waypoint steering + direct-steer fallback + `updateGhost`; imports config/world/
+nav only, sole consumer of `consumeDirtyTiles` [R1], never imported back [R6]).
+`enemies.js` (**new** — SPEC-ENEMIES Phase 3, the combat spine: 7-step
+`tickEnemies` + player-shot/melee/death-sweep/`awardKill`/knockback/enemy-shot
+passes + the Ghost factory; imports config/state/world/player-sinks/level-loader/
+enemies-ai, never imported back [R6]). Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
 `test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
 `test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
-`test-nav.js` (36), `test-enemies-nav.js` (24) — all green (**431 checks
-total**). Subsystems #1, #2, and #3 complete; #4 (Enemies) has its foundation
-(config/seams) + nav consumer layer built, roster/AI/combat pending.
+`test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66) —
+all green (**497 checks total**). Subsystems #1, #2, and #3 complete; #4
+(Enemies) has its foundation (config/seams) + nav consumer layer + combat spine
++ the Ghost built; the rest of the roster, spawners, and arced ordnance pending.
 Next subsystem is #4 (Enemies + spawners), which owns the repath cadence,
 round-robin budget, waypoint steering, and direct-steer fallback over `nav.js`
 (pending Q1 sign-off — Shape 1 baselined).
@@ -586,6 +597,70 @@ phase constraint). Load-bearing decisions:
   invocations (one per repath) for the budget/R1 tests; `__rebuildPathTiles(e)`
   lets a headless test synthesise a path and its dirty-intersection set without a
   live `findPath`. All `__`-prefixed, clearly test-only.
+
+### 2026-07-05 — `enemies.js` combat spine: the 7-step order, `awardKill` seam, one-way flow — Phase 3 (SPEC-ENEMIES)
+`enemies.js` built as the enemy combat spine, proven end-to-end with the Ghost
+(§6.1.1 — the minimal roster member that exercises chase → melee → death → gems +
+score → knockback → crate pushback). Load-bearing decisions:
+- **The 7-step `tickEnemies(dt)` order is a CONTRACT (§3.5/E11), noted explicitly
+  like `player.js`'s step order:** (1) spawner emit [Phase-4 no-op hook] → (2) nav
+  scheduler (`scheduleRepaths`) → (3) player-shot→enemy pass → (4) melee exchange →
+  (5) **death sweep** → (6) enemy AI tick over survivors (emergence gate → knockback
+  integrate → per-type move/attack) → (7) `updateEbolts` [Phase-7 no-op] +
+  enemy-shot→player hit-test. **R2/E11 baked in:** EXPLODE fires in step 6, AFTER
+  the step-5 sweep, so a Wraith shot down the frame its FLASH completes is DEFUSED
+  (removed before its AI runs). Proven structurally now (a synthetic "would-explode"
+  type whose AI is a spy: lethal-in-step-3 → swept → AI never runs; survivor →
+  AI runs). The concrete Wraith-defuse test lands in Phase 6.
+- **`awardKill(e, cause)` seam + SPEC-SCORING hand-off (E8).** Thin direct impl:
+  `cause.startsWith("player-")` (`player-bullet`/`player-melee`) → `G.score +=
+  e.points`; `wraith-aoe`/`enemy-*`/unknown → 0. The death sweep drops `e.gems`
+  gem pickups **ALWAYS** (position loot, not a score award — **Q3 baked-in: yes,
+  friendly-fire kills still drop gems**), regardless of cause. Cause is tagged on
+  the lethal blow (`e._cause`, `!e._cause`-guarded so a step-3 bullet tag survives a
+  step-4 melee overlap) and read by the sweep. **Owed:** SPEC-SCORING replaces
+  `awardKill` with the full chain-of-custody (barrel tags, shrapnel adoption) and #5
+  routes Nova/Lightning through the same seam — this phase just hands it the `cause`
+  string.
+- **Melee null-guard + 3-arg knockback (E6).** `const m = CFG.ENEMY[e.type]?.melee;
+  if (m != null) applyDamageToPlayer(m, e.type)` — a meleeless type (the Fire Wraith
+  has no `melee` field ⇒ `undefined`) deals 0 to the player but still takes the
+  player's 2. Player knockback uses the real **3-arg** signature
+  `applyKnockbackToPlayer(dirX, dirY, impulse)` (not `(dir, impulse)`). The pair
+  lockout is held on BOTH `e.contact` (the gate) and `G.player.meleeState` (a
+  `Set<enemy>`, lazily created; reserved as `null` by `initPlayer`). Crate bumper
+  (§6.4): `isCarryingCrate() && e.type !== "bat"` → push `CFG.ENEMY.knockbackPush`
+  (≈1.5 t), SKIP the exchange, do NOT lock; bats ignore the bumper and exchange
+  normally.
+- **Q2 baked-in (§6.5):** a Bounce player-shot is CONSUMED on an enemy hit like any
+  other shot (Bounce is a wall ricochet, not a pierce). The shot pass consumes on
+  first enemy contact regardless of `s.bounce`.
+- **Enemy `speed` stored EFFECTIVE — reconciles §2 vs the enemies-ai contract.**
+  §2's data shape comments `speed` as BASE, but the built `enemies-ai` layer
+  (`stepToward`/`updateGhost`) treats `e.speed` as **effective** px/s and never
+  re-applies the ramp (STATUS §enemies-ai). Resolved by having the factory bake the
+  ramp ONCE: `e.speed = speedMul × CFG.PLAYER.speed × (G.ramp.enemySpeedMult ?? 1)`.
+  Ramp is snapshotted before placements and never changes mid-level (§8.6), so
+  factory-time == read-time (E10: HP/damage never ramp; one place applies speed).
+- **Emergence gate applies to collision, not just AI (E4).** Steps 3 (shots) and 4
+  (melee) skip `spawn > 0` enemies — an emerging enemy "exists but does not act or
+  collide until spawn ≤ 0." (No spawners this phase, so all Ghosts have `spawn = 0`;
+  the guard is forward-safe for Phase 4.)
+- **Knockback dials added to `CFG.ENEMY` (§6.6, proposed/Q-tuning):**
+  `knockbackImpulse` 350 (melee ≈0.5 t), `knockbackPush` 1040 (crate bumper ≈1.5 t),
+  `knockbackFriction` 9 (mirrors `CFG.PLAYER`). Shared velocity+friction model
+  (`applyKnockbackToEnemy` SETS `e.kvx/kvy`; `integrateEnemyKnockback` decays by
+  `exp(-friction·dt)` and routes through `groundMover` so a knocked enemy can't
+  tunnel a wall). Flight (Bat, Phase 4) takes it as a **raw** nudge — the fn already
+  branches on `nav === "flight"` (R8-shaped now, per the prompt).
+- **R3 grep-guard:** no `owner:"player"` producer literal outside `player.js`'s
+  `spawnVolley` — asserted over `enemies.js`/`enemies-ai.js` in the test (comments
+  reworded to `player-owned` so the guard flags only real producers).
+- **Test seams:** the spine's individual passes are re-exported `__`-prefixed
+  (`__playerShotEnemyPass`/`__meleeExchange`/`__deathSweep`/`__enemyAITick`/
+  `__enemyShotPlayerPass`) so headless tests exercise one step without a full tick's
+  side effects; `__setEnemyAI(type, fn)` injects a synthetic type's AI for the R2
+  structural proof. All clearly test-only.
 
 ## Known open items (non-blocking for build)
 
@@ -1253,3 +1328,44 @@ not new tuning. Owed by the next Phase of #4: `enemies.js` (roster + per-type AI
 + combat), which will bind real `mask`/`mover` per class (incl. the Reaper's
 crates+barrels-only PHANTOM mover, R4) and drive `scheduleRepaths` +
 `steerNavigator` from `tickEnemies`. No git.
+
+### 2026-07-05 — Phase 3 (`enemies.js` — the combat spine + the Ghost)
+
+Built `src/enemies.js` (the enemy combat spine) + added `updateGhost` to
+`enemies-ai.js` + `test-enemies-combat.js` (66 checks green; full suite **497**).
+The whole spine is proven end-to-end with the Ghost, the simplest roster member.
+
+Implements (SPEC-ENEMIES §2, §3.5, §6.2, §6.3, §6.4, §6.5, §6.6, E6/E8/E11,
+R2/R3/R6): the 7-step `tickEnemies(dt)` frame order (spawner-emit hook [no-op] →
+`scheduleRepaths` → player-shot→enemy pass → melee exchange → death sweep →
+enemy AI tick [emergence gate → knockback integrate → per-type move/attack] →
+`updateEbolts` [no-op] + enemy-shot→player); the player-shot→enemy circle test
+(consume-on-hit incl. Bounce, Q2; lethal→`_cause` tag); the melee exchange
+(2-to-enemy + null-guarded melee-to-player, 3-arg player knockback + shared enemy
+knockback, `e.contact`+`meleeState` pair lockout, crate bumper + bat exemption);
+the death sweep (gems ALWAYS via Q3, `awardKill` attribution-gated, `enemy:killed`
+emit, splice); shared knockback machinery (`applyKnockbackToEnemy` +
+`integrateEnemyKnockback`, ground-`moveBody` vs flight-raw-nudge, R8-shaped); the
+enemy-shot→player hit-test (player-only, R3; entangle vs damage); the Ghost
+factory (`makeGhost` → `registerEntityFactory("ghost", …)`, effective-speed baked
+per E10). `updateGhost` (in `enemies-ai.js`): direct steer, no avoidance/repath,
+per-axis slide only — wedges in concave pockets by design.
+
+Tests cover SPEC-ENEMIES §9: melee (E6 — one exchange per contact + lockout +
+re-engage, crate bumper no-damage, bat exemption, meleeless null-guard); death
+(E8 — gems always, `player-*` adds points, `wraith-aoe` adds 0 but still drops
+gems); the frame-order invariant (R2 structural — a synthetic would-explode type
+whose AI-spy never runs when it's killed pre-sweep, and DOES run when it
+survives); the shot passes (consume incl. Bounce, miss leaves both intact,
+enemy-shot damage/entangle, R3 leaves player-owned shots untouched); the Ghost
+(slides up a full-height wall, wedges in an inside corner, never pathfinds);
+config/factory sanity + R6 import discipline both directions + no `Infinity` +
+the R3 producer grep.
+
+**No spec gaps requiring invented design.** Two interpretations logged above (not
+new design): `e.speed` stored EFFECTIVE (reconciles §2's "BASE" comment with the
+`enemies-ai` read-time contract, ramp baked once per E10) and the emergence gate
+applying to collision (steps 3/4 skip `spawn > 0`, per E4 "does not act or
+collide"). Owed by later phases: the eight other roster types + their factories,
+spawners (E4) with the emergence telegraph, arced ordnance (`updateEbolts`, E1),
+the Reaper PHANTOM mover (R4), and the abilities/barrels/scoring seams. No git.

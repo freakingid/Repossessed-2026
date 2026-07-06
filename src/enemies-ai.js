@@ -240,3 +240,19 @@ export function groundBlockerFilter(_entity) { return true; }
 
 // Convenience GROUND mover matching the §4 table (walls + all movables + spawners).
 export function groundMover(e, dx, dy) { moveBody(e, dx, dy, groundBlockerFilter); }
+
+/* ---- Ghost: direct steer, NO avoidance (§6.1.1) ------------------------- *
+   The minimal roster member — steer straight at the player and moveBody with the
+   GROUND filter. moveBody's per-axis slide is the ONLY thing keeping it moving
+   along a wall; there is no corner-probe or repath, so it wedges in concave
+   pockets by design (GDD §6.1.1). No FSM, no nav registry (never calls findPath).
+   e.speed is EFFECTIVE px/s (ramp baked in at spawn by enemies.js, E10) — this
+   never re-applies G.ramp.enemySpeedMult (matches stepToward's convention). */
+export function updateGhost(e, player, dt) {
+  const dx = player.x - e.x, dy = player.y - e.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-6) return;
+  e.face = Math.atan2(dy, dx);
+  const step = (e.speed || 0) * dt;
+  moveBody(e, (dx / d) * step, (dy / d) * step, groundBlockerFilter);
+}

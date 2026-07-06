@@ -190,6 +190,13 @@ export const CFG = {
     arriveDist: 9,                // px — ADD value (VERIFIED, R9: already px, do not *TILE)
     wpTimeout: 5,                 // s — ADD value (VERIFIED)
 
+    // shared knockback dials (§6.6) — reuse the player's velocity+friction model
+    // (SPEC-PLAYER P4). Impulses (proposed, Q-tuning): melee target ≈0.5 t,
+    // carried-crate bumper ≈1.5 t. friction matches CFG.PLAYER.knockbackFriction.
+    knockbackImpulse: 350,        // (proposed) melee-exchange enemy knockback ≈0.5 t
+    knockbackPush: 1040,          // (proposed) carried-crate bumper push ≈1.5 t (§6.2/§6.4)
+    knockbackFriction: 9,         // exp(-friction·dt) decay, mirrors CFG.PLAYER
+
     ghost:           { hp: 2, points: 50,  gems: 1, r: 12, speedMul: 0.45, melee: 1, nav: "direct" },
     skeleton:        { hp: 4, points: 100, gems: 1, r: 12, speedMul: 0.50, melee: 1, nav: "wallslide" },
     skeletonShooter: { hp: 4, points: 150, gems: 2, r: 12, speedMul: 0.65, melee: 1, nav: "ground",
