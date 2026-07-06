@@ -1,6 +1,29 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-06 (SPEC-ABILITIES Phase 4 — **Nova cast + ring pass
+**Last updated:** 2026-07-06 (SPEC-BARRELS Phase 1 — **enabling edits only**
+(`barrels.js` NOT built yet): `CFG.BARREL` block added to `config.js` verbatim
+per §2.3 (hp 4, r 14, `kick`/`shrapnel`/`explosion`/`light` dial groups,
+`LETHAL` 1e9 — sentinel-over-`Infinity`); `enemies.js` gained the public alias
+`export { spawnerDeathSweep as sweepDeadSpawners }` (B9 — mirrors the existing
+`sweepDeadEnemies` alias, body/callers untouched) so the coming `barrels.js`
+routes spawner kills through the one shared drop/score/emit/nav sweep; the two
+existing `detonateBarrelsInRadius` call sites (Fire-Wraith EXPLODE, Lobber lob
+splat) now pass a 5th `damage` argument (B10 — Wraith passes `explodeDmg`(4),
+Lobber passes its lob `dmg`(2)) — inert today since the registered seam is
+still the Phase-3 no-op default and ignores the extra arg, but wires the call
+sites so SPEC-BARRELS Phase 2's real `detonateBarrelsInRadius(x,y,radius,cause,
+damage=LETHAL)` receives the right magnitude without a second edit. The
+Lightning call site is untouched (rides the lethal default per B10, no edit
+needed). New `test-barrels-seams.js` (40, green): CFG.BARREL spot-checks (all
+groups + `LETHAL`), `sweepDeadSpawners` importable + sweeps an hp≤0 spawner
+(drops gems, awards points, calls `markNavDirty`), and the Wraith EXPLODE call
+site verified to pass `explodeDmg` as the 5th arg via a real `tickEnemies` run
+(mirrors `test-enemies-wraith.js`'s EXPLODE case). Full suite reran green,
+**782 total** (was 742, purely additive). Owed next: SPEC-BARRELS Phase 2 —
+`barrels.js` itself (barrel entity, roll/kick physics, HP ladder, shrapnel,
+the real `detonateBarrelsInRadius`, registration into both `enemies.js` and
+`abilities.js`).)
+(SPEC-ABILITIES Phase 4 — **Nova cast + ring pass
 built; subsystem #5 COMPLETE.** `abilities.js` `onNova` (§4.1) + the per-frame
 Nova ring pass in `updateAbilities` (§4.2) filled, replacing the Phase-2 TODO.
 **`onNova`:** (1) cooldown gate (`return` if `novaCd>0`); (2) fuel branch (A5) —
@@ -222,8 +245,12 @@ current or the next session starts blind.
   per-axis, owner+dmg retained, range not reset). Damage-to-targets deferred to
   #4/combat (enemies/barrels don't exist yet).
 - [ ] §7 Interactive objects — **crates (§7.1) BUILT** (carry physics in `player.js`,
-  crate-always ricochet in `projectiles.js`); **barrels (§7.2), shrapnel deferred**
-  to SPEC-BARRELS (post-#4).
+  crate-always ricochet in `projectiles.js`); **barrels (§7.2), shrapnel — SPEC-BARRELS
+  Phase 1 (enabling edits) done:** `CFG.BARREL` block added to `config.js` (§2.3,
+  data-only leaf); `enemies.js` exports `sweepDeadSpawners` alias (B9) + the Wraith/
+  Lobber `detonateBarrelsInRadius` call sites now pass a 5th `damage` arg (B10, inert
+  until Phase 2). `barrels.js` itself (entity/physics/HP ladder/shrapnel/the real
+  detonation fn) still owed.
 - [x] §6.4 Pathfinding — **BUILT.** `nav.js` complete. **Phase 1
   (infrastructure):** mask predicates (`isNavBlocked`, GROUND/PHANTOM),
   mask-split occupancy grid derived from live `G` arrays (D3), dirty/version
@@ -1561,6 +1588,48 @@ resolved as the phase prompt prescribed:
   projectile erase incl. the dying-frame case, immunity, and the dissipation
   emit). Real-module import, emit + barrel spies, defensive browser stubs. Suite
   688 → **742**, purely additive (no existing test touched).
+
+### 2026-07-06 — SPEC-BARRELS Phase 1 (enabling edits only; `barrels.js` NOT built)
+Three surgical edits per SPEC-BARRELS §1 (B9, B10) and §2.3 — no barrel entity,
+physics, or the real detonation fn yet:
+- **`config.js` — `CFG.BARREL` block added verbatim** (§2.3, data-only, leaf
+  preserved): `hp`(4), `r`(14), `kick{}` (roll/friction/bounce/impact dials,
+  §7.2.2), `shrapnel{}` (§7.2.4), `explosion{}` (FX payload, §7.2.3), `light{}`
+  (tiles, §8.4), `LETHAL`(1e9) — the seam's "detonate outright" sentinel
+  (sentinel-over-`Infinity` rule; `1e9`, never `Infinity`).
+- **`enemies.js` — `export { spawnerDeathSweep as sweepDeadSpawners }` (B9).**
+  One alias line, mirroring the existing `sweepDeadEnemies` alias (SPEC-ABILITIES
+  A1) — `spawnerDeathSweep`'s body and the existing `__spawnerDeathSweep` test
+  alias are untouched. This is the seam the coming `barrels.js` will call so a
+  shrapnel-killed spawner routes through the ONE shared gem/awardKill/emit/
+  markNavDirty path instead of a bespoke splice (B9's chain-of-custody: a
+  shrapnel kill tags `_cause = "player-shrapnel"`/`"enemy-shrapnel"` per the
+  barrel's adopted owner, and `awardKill` already scores `player-*` only).
+- **The two existing `detonateBarrelsInRadius` call sites gained a 5th `damage`
+  argument (B10).** Fire-Wraith EXPLODE now passes `cfg.explodeDmg`(4); the
+  Lobber lob-splat now passes the lob's own `b.dmg` (=`CFG.ENEMY.lobber.lobDmg`,
+  2). Both are **inert today** — the registered seam is still the Phase-3 no-op
+  default (`() => {}`) and simply drops the extra arg — but wiring them now means
+  Phase 2's real `detonateBarrelsInRadius(x,y,radius,cause,damage=LETHAL)`
+  receives the correct AoE magnitude (4-HP barrel: Wraith detonates it outright,
+  Lobber's 2 dmg only drops it to Burning) without a second pass over these call
+  sites. **The Lightning call site in `abilities.js` was deliberately NOT
+  touched** — per B10 it keeps its existing 4-arg call and rides the `damage=
+  LETHAL` default (§5.2 "lethal damage and detonate"), so `abilities.js` needs
+  no edit this phase.
+- **Test:** `test-barrels-seams.js` (40 checks) — `CFG.BARREL` spot-checks
+  (every dial group + the `LETHAL` sentinel), `sweepDeadSpawners` importable +
+  sweeps an hp≤0 spawner (drops gems, awards points, calls `markNavDirty`), and
+  the Wraith EXPLODE call site verified (via a real `tickEnemies(1/60)` run,
+  mirroring `test-enemies-wraith.js`'s EXPLODE case) to invoke the barrel seam
+  with `damage === CFG.ENEMY.fireWraith.explodeDmg`. Full existing suite reran
+  green with no changes needed — the 5th call-site arg is confirmed inert.
+  Suite 742 → **782**, purely additive.
+- **Owed next (SPEC-BARRELS Phase 2):** `barrels.js` itself — the barrel entity
+  (roll/kick physics per `CFG.BARREL.kick`, HP ladder, shrapnel burst on death),
+  the real `detonateBarrelsInRadius(x,y,radius,cause,damage=LETHAL)`, and its
+  registration into **both** `enemies.js` and `abilities.js` via each module's
+  `registerBarrelDetonation`.
 
 ## Known open items (non-blocking for build)
 

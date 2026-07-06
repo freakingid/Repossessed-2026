@@ -249,4 +249,31 @@ export const CFG = {
       // costs no gem energy — no field, the null case is structural (§5.2)
     },
   },
+
+  // §7.2 Barrels (SPEC-BARRELS §2.3). Tiles are ×CFG.TILE(32) at read time.
+  BARREL: {
+    hp: 4,                    // (proposed) HP ladder depth (§7.2.1)
+    r: 14,                    // body radius (proposed; between crate footprint and spawner 16)
+    kick: {                   // §7.2.2 — ADD slideStep model, barrel dials (B3)
+      speed: 224,             // 7 t/s initial roll (px/s)
+      friction: 2.0,          // (proposed) exponential decay rate; supersedes "4 t/s² linear"
+      bounce: 0.6,            // wall/solid bounce retention (GDD 60%)
+      stopSpeed: 30,          // settle threshold (px/s) → rolling=false, static
+      impactSpeed: 96,        // 3 t/s — min roll speed to damage an enemy (px/s)
+      impactDmg: 1,           // contact dmg to the enemy
+      impactSelfHp: 1,        // HP the barrel loses per enemy hit
+      impactSlow: 0.40,       // fraction of speed lost per enemy hit
+    },
+    shrapnel: {               // §7.2.4 (all proposed counts/dials)
+      count: 8, jitter: 0.2094,   // ±12° in rad
+      dmg: 1, health: 2, speed: 256 /* 8 t/s */, lifespan: 1.2,
+      cratePush: 16,          // 0.5 t pushback impulse applied to a crate on hit (px)
+    },
+    explosion: {              // §7.2.3 — FX payload (rendered by #10)
+      hitStopFrames: 4, shakeDur: 0.25, shakeFullTiles: 3, shakeZeroTiles: 12,
+      scorchFade: 8, chainCallout: 3,
+    },
+    light: { smolder: 2.0, burning: 3.0, raging: 4.5, flash: 8.0 },  // tiles; #7 reads (§8.4)
+    LETHAL: 1e9,              // seam "detonate outright" damage (B10; finite, not Infinity)
+  },
 };

@@ -588,7 +588,7 @@ function explodeFireWraith(wraith) {
     other.hp -= cfg.explodeDmg;
     if (other.hp <= 0 && !other._cause) other._cause = "wraith-aoe";
   }
-  detonateBarrelsInRadius(wraith.x, wraith.y, r, "wraith-aoe");
+  detonateBarrelsInRadius(wraith.x, wraith.y, r, "wraith-aoe", cfg.explodeDmg);
   wraith.hp = 0;
   wraith._cause = "wraith-aoe";   // dies in its own blast
 }
@@ -656,7 +656,7 @@ function updateEbolts(dt) {
           applyDamageToPlayer(b.dmg, "enemy-lob");
         }
       }
-      detonateBarrelsInRadius(b.tx, b.ty, b.blast, "enemy-lob");
+      detonateBarrelsInRadius(b.tx, b.ty, b.blast, "enemy-lob", b.dmg);
       ebolts.splice(i, 1);
     }
   }
@@ -726,3 +726,9 @@ export {
    instead of a bespoke splice. Alias only: deathSweep's body and callers are
    unchanged; abilities import this name and self-run it (order-tolerant). */
 export { deathSweep as sweepDeadEnemies };
+
+/* SPEC-BARRELS B9 — public alias so barrel/shrapnel spawner kills route through
+   the ONE shared spawner death-sweep path (dropGems→awardKill→emit→nav→cleanup)
+   instead of a bespoke splice. Alias only: spawnerDeathSweep's body and callers
+   are unchanged; barrels.js imports this name and self-runs it. */
+export { spawnerDeathSweep as sweepDeadSpawners };
