@@ -1,6 +1,63 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-06 (SPEC-BARRELS Phase 1 — **enabling edits only**
+**Last updated:** 2026-07-06 (SPEC-BARRELS Phase 2 — **`barrels.js` created**:
+entity decoration, the fire ladder, damage intake, and the dual
+detonation-seam fill (B1/B2/B4/B10). **NO roll/kick physics, NO
+detonation/shrapnel resolution yet** — those are Phase 3/4. New `src/barrels.js`
+decorates the loader's `barrel` placeholder via `getEntityFactory("barrel")`
+(the #4 spawner-decoration pattern — call through, then augment) adding
+`hp`(4)/`r`(14)/`vx`/`vy`(0)/`rolling`(false)/`_cause`(null) and pushing a
+`{source: barrel}` light emitter into `G.lights` (§3.3, the Fire-Wraith glow
+precedent — live entity reference, no per-frame re-sync); re-registered via
+`registerEntityFactory`. `fireStateOf(barrel)` is a **pure function of hp**
+(§2.5 ladder: 4/3/2/1/≤0 → intact/smolder/burning/raging/explode) — **never
+stored**, so it can't desync; `lightRadiusOf` reads `CFG.BARREL.light[state]×TILE`
+(0 for intact). `damageBarrel(barrel, amount, cause)` (§3.1) is the single
+intake sink: subtracts hp, tags `_cause` (last-damager-wins), and at `hp≤0`
+leaves a `// Phase 4: resolve detonation` marker — **no splice, no shrapnel,
+barrel stays in `G.barrels` structurally intact otherwise** (this phase's
+explicit scope fence). `detonateBarrelsInRadius(x, y, radius, cause, damage =
+CFG.BARREL.LETHAL)` (§6/B10, all pixels) is the real seam fn — applies
+`damage` to every barrel within `radius + b.r` — and is **registered into BOTH
+`enemies.js` and `abilities.js`** at module load via aliased imports
+(`registerBarrelDetonation as regEnemies` / `as regAbilities`), closing the two
+dangling seams STATUS has carried since SPEC-ABILITIES Phase 2. `shotsVsBarrels()`
+(§B4) is a self-contained pass over `G.shots`: an overlapping shot is
+**removed (never bounced)** and damages the barrel, tagged `"player-bullet"`
+or `"enemy-shot"` from `s.owner` — **note:** the spec's `§10` test-plan wording
+says `"enemy-<kind>"`, but real `Shot` objects only ever carry `owner:
+"player"|"enemy"` (no per-enemy-kind tag anywhere in `projectiles.js`/
+`enemies.js`) — resolved as `"enemy-shot"`, a concrete cause string satisfying
+the same `!startsWith("player-")` scoring contract (§9); flag if a future spec
+wants shots to carry their minting enemy's kind. `initBarrels()` lazy-inits
+`G.shrapnel ||= []` (Phase 4 will push into it). **Import graph verified
+one-way:** `barrels.js` imports config/state/world (`bodyHitsBlocker`/`isWall`/
+`tileCenter` — pinned per the spec's import list, `bodyHitsBlocker`/`isWall`
+unused directly this phase, owed by the Phase-3 roll integrator)/level-loader
+(`emit`/`markNavDirty`/`registerEntityFactory`/`getEntityFactory` — `emit` also
+pinned, unused until Phase 4's detonation emit)/`enemies.js`
+(`sweepDeadEnemies`/`sweepDeadSpawners`, unused directly this phase, owed by
+Phase 4's death-sweep-after-detonation step)/`abilities.js`'s
+`registerBarrelDetonation`; a repo-wide grep confirms nothing imports
+`barrels.js` back. **Boot debt accumulates** (unchanged from Phase 1): the
+eventual bootstrap must `import "./barrels.js"` so the factory decoration +
+dual seam registration run before frame 1 — same debt already owed for
+`abilities.js`. New `test-barrels.js` (44, green): decorate (hp/r/vx/vy/
+rolling/_cause + the `G.lights` emitter), the full fire-ladder + light-radius
+mapping (4→0 through ≤0→explode), `damageBarrel` (subtract/tag/last-damager-
+wins/hp≤0 leaves the barrel structurally in place with `G.shrapnel` still
+empty), `detonateBarrelsInRadius` (Wraith `explodeDmg`(4) detonates a 4-HP
+barrel, Lobber's lob `dmg`(2) leaves it at 2/Burning, Lightning's lethal
+default drives hp≤0, out-of-radius untouched, both registries route to the
+same real fn), and `shotsVsBarrels` (player + enemy shot consume+damage+tag,
+removed not bounced, non-overlap untouched). Full suite reran green, **826
+total** (was 782, purely additive). Owed next: SPEC-BARRELS Phase 3 (kick/roll
+physics reusing the ADD `slideStep` model, B3 — the second sanctioned
+`moveBody` exception after `phantomMover`) and Phase 4 (detonation resolution +
+shrapnel species + chain reactions, B5–B9); downstream, `player.js`'s barrel
+carry-FSM branches (B5/B6) are **not yet touched** — `carriedBarrel()` doesn't
+exist yet, correctly out of this phase's scope.)
+(SPEC-BARRELS Phase 1 — **enabling edits only**
 (`barrels.js` NOT built yet): `CFG.BARREL` block added to `config.js` verbatim
 per §2.3 (hp 4, r 14, `kick`/`shrapnel`/`explosion`/`light` dial groups,
 `LETHAL` 1e9 — sentinel-over-`Infinity`); `enemies.js` gained the public alias
@@ -246,11 +303,19 @@ current or the next session starts blind.
   #4/combat (enemies/barrels don't exist yet).
 - [ ] §7 Interactive objects — **crates (§7.1) BUILT** (carry physics in `player.js`,
   crate-always ricochet in `projectiles.js`); **barrels (§7.2), shrapnel — SPEC-BARRELS
-  Phase 1 (enabling edits) done:** `CFG.BARREL` block added to `config.js` (§2.3,
-  data-only leaf); `enemies.js` exports `sweepDeadSpawners` alias (B9) + the Wraith/
-  Lobber `detonateBarrelsInRadius` call sites now pass a 5th `damage` arg (B10, inert
-  until Phase 2). `barrels.js` itself (entity/physics/HP ladder/shrapnel/the real
-  detonation fn) still owed.
+  Phase 1 (enabling edits) + Phase 2 (`barrels.js` entity/ladder/damage-intake/seam-fill)
+  done:** `CFG.BARREL` block in `config.js` (§2.3); `enemies.js` exports
+  `sweepDeadSpawners` alias (B9) + the Wraith/Lobber `detonateBarrelsInRadius` call
+  sites pass a 5th `damage` arg (B10). New `src/barrels.js` (Phase 2): decorates the
+  loader's `barrel` placeholder (`hp`/`r`/`vx`/`vy`/`rolling`/`_cause` + a `G.lights`
+  emitter); `fireStateOf`/`lightRadiusOf` (pure fns of hp, §2.5); `damageBarrel`
+  (§3.1, the single intake sink; hp≤0 is a marked Phase-4 TODO, no splice/shrapnel
+  yet); the real `detonateBarrelsInRadius(x,y,radius,cause,damage=LETHAL)` **filled
+  into both `enemies.js` and `abilities.js`** (B10, closing both dangling seams);
+  `shotsVsBarrels()` (B4, self-contained consume-pass); `initBarrels()` (lazy-inits
+  `G.shrapnel`). **Still owed:** kick/roll physics (Phase 3, B3), detonation
+  resolution + shrapnel species + chain reactions (Phase 4, B5–B9), and `player.js`'s
+  barrel carry-FSM branches (B5/B6, `carriedBarrel()` doesn't exist yet).
 - [x] §6.4 Pathfinding — **BUILT.** `nav.js` complete. **Phase 1
   (infrastructure):** mask predicates (`isNavBlocked`, GROUND/PHANTOM),
   mask-split occupancy grid derived from live `G` arrays (D3), dirty/version
@@ -522,7 +587,16 @@ emit at cast]; both registered at load via `registerAbility` + both exported as
 `__onNova`/`__onLightning` for headless tests; Nova immunity is by OMISSION
 [never references `G.spawners`/`G.crates`/`G.barrels`]; imports config/state +
 one-way `emit`/`registerAbility`+`applyStun`/`sweepDeadEnemies`, never imported
-back). Tests:
+back). `barrels.js` (**SPEC-BARRELS #6, Phase 2**: barrel entity decoration
+[`getEntityFactory("barrel")` decorate-pattern], `fireStateOf`/`lightRadiusOf`
+[pure fns of hp], `damageBarrel` [the single intake sink; hp≤0 is a marked
+Phase-4 TODO], the real `detonateBarrelsInRadius` [filled into BOTH
+`enemies.js`'s and `abilities.js`'s `registerBarrelDetonation`], `shotsVsBarrels`
+[self-contained shot-consume pass], `initBarrels`; imports config/state/world/
+level-loader/`enemies.js`'s `sweepDeadEnemies`+`sweepDeadSpawners`/
+`abilities.js`'s `registerBarrelDetonation`, never imported back [R6]; still
+owed: roll/kick physics [Phase 3] and detonation/shrapnel resolution [Phase 4]).
+Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
 `test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
@@ -532,13 +606,16 @@ back). Tests:
 `test-enemies-wraith.js` (16), `test-enemies-lobber.js` (15),
 `test-enemies-reaper.js` (24), `test-enemies-spawner.js` (28),
 `test-abilities-seams.js` (29), `test-abilities.js` (18),
-`test-abilities-lightning.js` (22), `test-abilities-nova.js` (54) —
-all green (**742 checks total**). Subsystems #1, #2, #3, #4 (Enemies +
+`test-abilities-lightning.js` (22), `test-abilities-nova.js` (54),
+`test-barrels-seams.js` (40), `test-barrels.js` (44) —
+all green (**826 checks total**). Subsystems #1, #2, #3, #4 (Enemies +
 spawners), and #5 (Abilities) are all COMPLETE: nav consumer layer, combat
 spine, all 9 roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton
 Shooter/Fire Wraith/Lobber/Reaper), spawners (emission + spawner-as-target),
 and the gem economy + Nova + Lightning abilities — all built and tested
-headlessly.
+headlessly. SPEC-BARRELS (#6, in progress): Phase 1 (enabling edits) + Phase 2
+(`barrels.js` entity/ladder/damage-intake/seam-fill) done; Phase 3 (roll/kick)
+and Phase 4 (detonation/shrapnel) owed.
 
 ## Implementation sequencing (agreed order)
 
