@@ -1,6 +1,29 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ABILITIES Phase 1 — **subsystem #5 begun,
+**Last updated:** 2026-07-05 (SPEC-ABILITIES Phase 2 — **`abilities.js`
+foundation built** (no Nova/Lightning behaviour yet). New file `src/abilities.js`
+imports config/state + one-way `level-loader` `emit` / `player` `registerAbility`
++`applyStun` / `enemies` `sweepDeadEnemies` (NONE import it back — graph
+grep-clean; `emit`/`applyStun`/`sweepDeadEnemies` imported now to pin the one-way
+graph, consumed by the Phase 3/4 handler bodies). Built: module-local
+`novaCd`/`lightningCd`; `addGemEnergy(value)` (A6/§3 — bar-fill → whole-charge
+banking to `chargeCap` → discard+clamp; **verbatim A6 algorithm**, `>` not `>=`,
+pure fn of `G.gemEnergy`/`G.storedCharges`); `initAbilities()` (reset both
+cooldowns + `G.novas=[]`); `updateAbilities(dt)` (**this phase only** ticks both
+cooldowns down by dt floored at 0 + lazy-inits `G.novas ||= []`; the Phase-4
+Nova-ring pass is a marked TODO); `onNova`/`onLightning` **NO-OP stubs**
+registered BY REFERENCE at module load via `registerAbility` (import side-effect
+— so the eventual **bootstrap must `import "./abilities.js"`** for the
+registration to run before frame 1); `registerBarrelDetonation` seam (A8, no-op
+default — **SPEC-BARRELS must register its real fn into BOTH `enemies.js` AND
+`abilities.js`**; Nova never touches barrels); plus a read-only `getCooldowns()`
+accessor (net-new — cooldowns are module-local per §2.4 with no observation hook,
+so this mirrors `nav.js`'s `getNavVersion()` to make the tick testable now + feed
+the HUD readiness icons the spec Scope says #5 maintains; see decision log).
+`test-abilities.js` (18) green; suite **666 total** (was 648, purely additive).
+Owed by later phases: Lightning cast (P3), Nova rings + the `updateAbilities`
+ring pass (P4), and the boot `import "./abilities.js"`.)
+(SPEC-ABILITIES Phase 1 — **subsystem #5 begun,
 enabling seams only** (no `abilities.js` yet): four surgical edits — `CFG.ABILITY`
 block (§2.3, nova/lightning dials, leaf data), `enemies.js` `sweepDeadEnemies`
 ALIAS export of the private `deathSweep` (A1, body/callers untouched), `player.js`
@@ -271,9 +294,17 @@ current or the next session starts blind.
   imports) — Lightning's self-stun sink; (4) `level-loader.js` clears `G.novas =
   []` in the transient-clear line (A9 — Nova rings are a per-level transient;
   `abilities.js` will also lazy-init `G.novas ||= []`). Tests:
-  `test-abilities-seams.js` (29, green). Owed by the build pass: `abilities.js`
-  itself (gem-energy economy, Nova rings + updateAbilities, Lightning cast, the
-  `registerAbility`/`registerBarrelDetonation` fills).
+  `test-abilities-seams.js` (29, green). **Phase 2 (`abilities.js` foundation)
+  done** — new `src/abilities.js`: `addGemEnergy` gem economy (A6/§3),
+  module-local `novaCd`/`lightningCd` + `updateAbilities(dt)` cooldown tick (Nova
+  ring pass is a Phase-4 TODO), `initAbilities()` reset, the `getCooldowns()`
+  read-only accessor, the A8 `registerBarrelDetonation` seam (no-op default), and
+  `onNova`/`onLightning` NO-OP stubs registered at load via `registerAbility`.
+  Import graph one-way (config/state + `emit`/`registerAbility`+`applyStun`/
+  `sweepDeadEnemies`, none import back). Tests: `test-abilities.js` (18, green).
+  Owed by the build pass: Lightning cast body (P3), Nova rings + the ring pass in
+  `updateAbilities` (P4), the SPEC-BARRELS fill of `registerBarrelDetonation`, and
+  the boot `import "./abilities.js"` so `registerAbility` runs before frame 1.
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
 - [ ] §9/§10/§11 Scoring, HUD, render/lighting, audio
@@ -331,7 +362,14 @@ imported back [R6]). `level-loader.js` gained `getEntityFactory(type)` (Phase
 9) — a read-back accessor so a later subsystem's factory can DECORATE the
 current registration instead of re-deriving its logic (used by `makeSpawner`
 to reuse the placeholder's eligibility-filtered `table`/ramped
-`interval`/`liveCap` computation). Tests:
+`interval`/`liveCap` computation). `abilities.js` (**new — SPEC-ABILITIES
+Phase 2**: `addGemEnergy` gem economy [A6/§3], module-local `novaCd`/
+`lightningCd` + `updateAbilities(dt)` cooldown tick [Phase-4 Nova ring pass
+TODO], `initAbilities`, read-only `getCooldowns()`, the A8
+`registerBarrelDetonation` no-op seam, and `onNova`/`onLightning` NO-OP stubs
+registered at load via `registerAbility`; imports config/state + one-way
+`emit`/`registerAbility`+`applyStun`/`sweepDeadEnemies`, never imported back).
+Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
 `test-level-loader.js` (40), `test-level-content.js` (79),
 `test-level-generator.js` (20), `test-level-integration.js` (16),
@@ -339,8 +377,9 @@ to reuse the placeholder's eligibility-filtered `table`/ramped
 `test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66),
 `test-enemies-steer.js` (24), `test-enemies-ground.js` (15),
 `test-enemies-wraith.js` (16), `test-enemies-lobber.js` (15),
-`test-enemies-reaper.js` (24), `test-enemies-spawner.js` (28) —
-all green (**619 checks total**). Subsystems #1, #2, #3, and #4 (Enemies +
+`test-enemies-reaper.js` (24), `test-enemies-spawner.js` (28),
+`test-abilities-seams.js` (29), `test-abilities.js` (18) —
+all green (**666 checks total**). Subsystems #1, #2, #3, and #4 (Enemies +
 spawners) are all COMPLETE: nav consumer layer, combat spine, all 9 roster
 types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire
 Wraith/Lobber/Reaper), and spawners (emission + spawner-as-target) built and
@@ -1215,6 +1254,49 @@ A7/A9), not new design:
   import, a defensive `window`/`document`/`AudioContext` stub — not strictly
   needed since the graph touches `window` only inside uncalled `input.js` glue,
   but installed to survive a graph shift).
+
+### 2026-07-06 — SPEC-ABILITIES Phase 2 (`abilities.js` foundation built) — subsystem #5
+New file `src/abilities.js` — the gem-energy economy + cooldown/ring scaffolding,
+NO Nova/Lightning behaviour yet. Decisions:
+- **Import surface pins the one-way graph now.** `abilities.js` imports
+  config/state + one-way `level-loader` (`emit`), `player` (`registerAbility`,
+  `applyStun`), `enemies` (`sweepDeadEnemies`). `emit`/`applyStun`/
+  `sweepDeadEnemies` are **imported but unused this phase** (the Phase 3/4 handler
+  bodies consume them) — deliberately imported now so a future accidental cycle
+  (player/enemies importing abilities back) fails at load; grep confirms none
+  import it back. The **boot sequence must `import "./abilities.js"`** so the
+  `registerAbility("nova"/"lightning", …)` side-effect runs before frame 1 — the
+  standard register-callback load-order contract (owed by the later integration
+  phase; noted in the code map).
+- **`addGemEnergy` is the A6 algorithm verbatim** (`>` not `>=`, so exactly-100
+  stays in the bar; overflow banks whole `barCap` chunks up to `chargeCap`, then
+  clamps). Pure fn of `G.gemEnergy`/`G.storedCharges`; touches nothing else.
+- **`updateAbilities(dt)` this phase ONLY ticks cooldowns** (`Math.max(0, cd-dt)`,
+  floored) + lazy-inits `G.novas ||= []`; the Nova ring pass is a marked
+  `// Phase 4:` TODO. No `Infinity` anywhere (sentinel rule; all state finite).
+- **`registerBarrelDetonation` seam (A8)** — `let detonateBarrelsInRadius = () =>
+  {}` + register fn, no-op default, same shape as `enemies.js`. **Cross-spec
+  note: SPEC-BARRELS must register its real detonation fn into BOTH `enemies.js`
+  AND `abilities.js`.** Nova deliberately never calls it (GDD §5.1).
+- **NET-NEW: read-only `getCooldowns()` accessor.** §2.4 pins `novaCd`/
+  `lightningCd` as module-local with no observation hook, and the phase's
+  `onNova`/`onLightning` are no-op stubs that never set them — so a test could
+  neither read nor drive the cooldowns, making the prompt's "test that
+  `updateAbilities` decrements cooldowns to 0" un-assertable. Resolved with a
+  read-only `{nova, lightning}` accessor mirroring `nav.js`'s `getNavVersion()`
+  precedent (surface internal module state without moving storage into G); it
+  also feeds the HUD ability-readiness icons the spec Scope says #5 "maintains
+  the state [they] read" (#10). Non-behavioral, read-only. **Testability limit
+  flagged:** the decrement-**from-nonzero** path is NOT exercisable until Phase
+  3/4 handlers set a cooldown; Phase-2 tests assert only the floor-at-0 + init
+  reset via the accessor. This is the one net-new interface beyond the phase
+  prompt's build list — surfaced here per "phases flag their own risks."
+- **Test:** `test-abilities.js` (18 checks) — `addGemEnergy` bar-fill/charge-
+  banking/discard-clamp incl. exactly-at-cap and multi-charge credits and the
+  "only two fuel fields mutated" purity check; `initAbilities` clears `G.novas`
+  and zeroes both cooldowns (via `getCooldowns`); `updateAbilities` floors at 0
+  across many ticks and lazy-inits `G.novas`. House headless harness, real-module
+  import, defensive browser stubs. Suite 648 → 666, purely additive.
 
 ## Known open items (non-blocking for build)
 

@@ -92,7 +92,7 @@ src/
   enemies.js       // enemy entities + roster;  enemies-ai.js / nav.js for steering + A*.
   projectiles.js   // shots, arrows, shrapnel; ricochet rules.
   combat.js        // damage exchange, attribution/ownership tags.
-  abilities.js     // Nova, Lightning, gem economy.
+  abilities.js     // Nova, Lightning, gem economy.  EXISTS (SPEC-ABILITIES P2 foundation: addGemEnergy, cooldowns, seams; Nova/Lightning bodies owed P3/P4). BOOT must `import "./abilities.js"` so registerAbility runs. registerBarrelDetonation seam → filled by SPEC-BARRELS.
   events.js        // pub/sub; one-way dependency.
   savegame.js      // pure-leaf save/load (rep_-prefixed keys).
   achievements.js  // events subscriber.
