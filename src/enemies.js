@@ -18,7 +18,7 @@
      5. death sweep (§6.3)        // an APPROACH/FLASH Wraith removed here is DEFUSED
      6. enemy AI tick over survivors: emergence gate → move/steer → per-type
         attack. A surviving Wraith whose FLASH completes EXPLODEs HERE (Phase 6).
-     7. ordnance update: updateEbolts (Phase 7) + enemy-shot → player hit-test.
+     7. ordnance update: updateEbolts (arced lobs, Phase 7) + enemy-shot → player hit-test.
 
    ---- R6: ONE-WAY IMPORT FLOW --------------------------------------------
    enemies.js imports config/state/world, the player SINKS
@@ -39,8 +39,8 @@ import { emit, registerEntityFactory } from "./level-loader.js";
 import { makeShot } from "./projectiles.js";
 import {
   scheduleRepaths, groundMover, updateGhost, updateSkeleton, updateSpider,
-  updateBat, updateZombie, updateSkeletonShooter, updateFireWraith,
-  registerSpiderWebFire, registerShooterFire, removeNavigator,
+  updateBat, updateZombie, updateSkeletonShooter, updateFireWraith, updateLobber,
+  registerSpiderWebFire, registerShooterFire, registerLobberFire, removeNavigator,
 } from "./enemies-ai.js";
 
 // Spider web-fire seam (§6.1.6) — enemies-ai.js's updateSpider calls this to
@@ -70,6 +70,33 @@ registerShooterFire((e, ux, uy) => {
   }));
 });
 
+// Lobber lob-fire seam (§6.1.4/E1) — enemies-ai.js's updateLobber calls this
+// to mint the arced G.ebolts entry; kept here (not in enemies-ai.js) so that
+// layer never needs to import G.ebolts (R6). tx,ty is the player's position at
+// fire time, PERTURBED by a random offset within G.ramp.lobberErrorRadius —
+// the net-new accuracy-error mechanic vs ADD's exact-target fireEnemyArc. The
+// perturbation is a uniform random point inside the error-radius disc (angle +
+// radius via sqrt(rand), so it's uniform over the disc area, not biased to the
+// center).
+registerLobberFire((e, tx, ty) => {
+  const cfg = CFG.ENEMY.lobber;
+  const errR = ((G.ramp && G.ramp.lobberErrorRadius) || 0) * CFG.TILE;
+  const ang = Math.random() * Math.PI * 2;
+  const rad = Math.sqrt(Math.random()) * errR;
+  const lx = tx + Math.cos(ang) * rad;
+  const ly = ty + Math.sin(ang) * rad;
+  if (!G.ebolts) G.ebolts = [];
+  G.ebolts.push({
+    kind: "arc",
+    x: e.x, y: e.y, x0: e.x, y0: e.y,
+    tx: lx, ty: ly,
+    t: 0, dur: cfg.airtime,
+    height: 0,
+    dmg: cfg.lobDmg, blast: cfg.blast * CFG.TILE,
+    owner: "enemy",
+  });
+});
+
 // Barrel-detonation seam (§7) — barrels don't exist yet (SPEC-BARRELS is
 // post-#4); mirrors the loader's registered-sink pattern (registerBlockerSink)
 // so the Wraith's EXPLODE (and later the Lobber's lob) can call into barrel
@@ -90,6 +117,7 @@ const aiByType = new Map([
   ["zombie", updateZombie],
   ["skeletonShooter", updateSkeletonShooter],
   ["fireWraith", fireWraithAI],
+  ["lobber", updateLobber],
 ]);
 
 // Test seam (structural R2 frame-order proof): inject a synthetic type's AI so a
@@ -149,6 +177,9 @@ registerEntityFactory("zombie", makeZombie);
 
 export function makeSkeletonShooter(p) { return makeEnemy("skeletonShooter", p); }
 registerEntityFactory("skeletonShooter", makeSkeletonShooter);
+
+export function makeLobber(p) { return makeEnemy("lobber", p); }
+registerEntityFactory("lobber", makeLobber);
 
 // Fire Wraith self-glow (§8.4, dark levels) — a seam to #7: register the light
 // emitter here (no draw code). G.lights is the loader's already-reserved
@@ -385,9 +416,38 @@ function enemyAITick(dt) {
   }
 }
 
-// Step 7 — arced ordnance (Phase 7). G.ebolts is cleared by the loader; no lobs
-// exist yet, so this is an intentional no-op hook holding the frame-order slot.
-function updateEbolts(_dt) { /* Phase 7: Lobber lobs (arced, timer-resolved). */ }
+// Step 7 (§6.4, E1) — arced ordnance. ADD updateArc verbatim (§11/§12): each
+// G.ebolts entry interpolates its ground position launch->landing over `dur`
+// (parabolic `height` for the renderer), wall-agnostic the whole flight (the
+// lob never collides in transit — only the landing splat is tested). At
+// t >= dur: splat + AoE vs the player only (§9 — arced ordnance never hits
+// enemies) at `blast + player.r`, `applyDamageToPlayer(dmg, "enemy-lob")` +
+// the barrel-detonation seam (registered in Phase 6), then the entry is
+// removed. Self-contained (not moved by player.js's updateShots — arced
+// ordnance is a distinct timed kind, E1), so no cross-file ordering
+// assumption applies here unlike the straight-shot passes.
+function updateEbolts(dt) {
+  const ebolts = G.ebolts, p = G.player;
+  if (!ebolts) return;
+  for (let i = ebolts.length - 1; i >= 0; i--) {
+    const b = ebolts[i];
+    b.t += dt;
+    const k = Math.min(b.t / b.dur, 1);
+    b.x = b.x0 + (b.tx - b.x0) * k;
+    b.y = b.y0 + (b.ty - b.y0) * k;
+    b.height = Math.sin(k * Math.PI) * 24;
+    if (k >= 1) {
+      if (p && p.loco !== "DEAD") {
+        const dx = p.x - b.tx, dy = p.y - b.ty;
+        if (dx * dx + dy * dy <= (b.blast + p.r) * (b.blast + p.r)) {
+          applyDamageToPlayer(b.dmg, "enemy-lob");
+        }
+      }
+      detonateBarrelsInRadius(b.tx, b.ty, b.blast, "enemy-lob");
+      ebolts.splice(i, 1);
+    }
+  }
+}
 
 // Step 7 (§6.4) — enemy-shot → player hit-test. Player-ONLY (enemy shots never
 // hit enemies, R3): only owner==="enemy" shots are tested; player-owned shots are

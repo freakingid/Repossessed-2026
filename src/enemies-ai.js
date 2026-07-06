@@ -513,6 +513,67 @@ export function updateFireWraith(e, player, dt) {
   steerNavigator(e, player, dt);
 }
 
+/* ---- Lobber: cover-seek, direct port of ADD updateSorter (§6.1.4) ------- *
+   NOT an A* navigator — no addNavigator/steerNavigator, cover-seek only via
+   moveBody + groundBlockerFilter (do not register this with the Phase-2
+   layer). Throttled LOS (losCheckEvery 0.12s, ADD convention):
+     canSee (exposed)  -> panic: flee AWAY at fleeMul with a wandering jitter
+                          (ADD e.wander += (rand-.5)*jitter*dt*6, angle = away +
+                          sin(wander)*0.9); HOLD FIRE.
+     !canSee (in cover)-> advance at 0.40x; within lobRange, lob every lobEvery.
+   The lob itself is minted via a registered seam (lobFire) into G.ebolts —
+   enemies-ai.js never imports projectiles/G.ebolts (R6). */
+const LOBBER_FLEE_JITTER = 1.0;   // ADD d.fleeJitter analogue (proposed — no spec dial named)
+
+function initLobberState(e) {
+  const s = e.lobber || (e.lobber = {});
+  if (s.losT === undefined) {
+    s.canSee = false;
+    s.losT = 0;
+    s.fireCd = 0;
+    s.wander = 0;
+  }
+  return s;
+}
+
+let lobFire = () => {};
+export function registerLobberFire(fn) { lobFire = fn; }
+
+export function updateLobber(e, player, dt) {
+  const cfg = CFG.ENEMY.lobber;
+  const s = initLobberState(e);
+  const dx = player.x - e.x, dy = player.y - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+
+  s.losT -= dt;
+  if (s.losT <= 0) {
+    s.losT = cfg.losCheckEvery;
+    s.canSee = hasLineOfSight(e.x, e.y, player.x, player.y);
+  }
+
+  if (s.canSee) {
+    // Exposed -> panic. Flee away from the player with a wandering jitter so
+    // the path reads as a freak-out, not a straight retreat. Hold fire.
+    s.wander += (Math.random() - 0.5) * LOBBER_FLEE_JITTER * dt * 6;
+    const away = Math.atan2(-dy, -dx);
+    const ang = away + Math.sin(s.wander) * 0.9;
+    e.face = ang;
+    const step = cfg.fleeMul * CFG.PLAYER.speed * dt;
+    moveBody(e, Math.cos(ang) * step, Math.sin(ang) * step, groundBlockerFilter);
+  } else {
+    // In cover -> advance toward the player, bombard once within lob range.
+    e.face = Math.atan2(dy, dx);
+    const step = cfg.speedMul * CFG.PLAYER.speed * dt;
+    moveBody(e, (dx / dist) * step, (dy / dist) * step, groundBlockerFilter);
+    s.fireCd -= dt;
+    const range = cfg.lobRange * CFG.TILE;
+    if (s.fireCd <= 0 && dist <= range) {
+      lobFire(e, player.x, player.y);
+      s.fireCd = cfg.lobEvery;
+    }
+  }
+}
+
 /* ---- Skeleton Shooter: GROUND A*, FSM WANDER -> HUNT (§6.1.3) ----------- *
    WANDER (unaware): slow ambient roam toward an occasionally-picked random
    reachable waypoint (registered as a GROUND navigator so it rides the same

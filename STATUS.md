@@ -1,6 +1,6 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 6 — **Fire Wraith added** (§6.1.8, walking bomb) + the barrel-detonation seam. `updateFireWraith` (FSM `APPROACH→FLASH`, `enemies-ai.js`) is a GROUND A* navigator like the Zombie/Shooter — `APPROACH` steers full A* at `0.50×`; within `armDist(1.5t)` it flips to `FLASH` and continues steering at `flashMul(0.5×)` (a temporary `e.speed` scale-then-restore around one `steerNavigator` call, so the shared nav layer needed no new multiplier hook) until `flashDur(0.8s)` elapses, at which point it only SETS a sticky `e.wraith.explode=true` flag — it never resolves the AoE itself. **R2/E11 concretely proven** (not just structurally, as Phase 3 did): `enemies.js`'s new `fireWraithAI` wraps `updateFireWraith` in the step-6 dispatch, collecting any newly-flagged explosions into a same-frame queue; EXPLODE resolution (`explodeFireWraith`) runs AFTER the whole step-6 AI loop (still step 6, still after step 5's death sweep) — 4 dmg to the player in `explodeRadius(2t)`, friendly-fire damage to every other enemy in radius (tagged `"wraith-aoe"`, 0 score via the existing `awardKill` gate, gems still drop — Q3), the registered `detonateBarrelsInRadius` seam called, crates untouched (the AoE never reads `G.crates`), then ONE extra `deathSweep()` call resolves all resulting deaths (self + friendly-fire) through the existing gem/awardKill/emit/nav/light cleanup path rather than duplicating it. A Wraith shot down mid-FLASH is removed by the ordinary step-5 sweep and never reaches `fireWraithAI` this frame at all — defused, by construction of the existing 7-step order, no new ordering code needed. **Barrel-detonation seam**: `registerBarrelDetonation(fn)` in `enemies.js`, no-op default, mirrors the loader's sink pattern — barrels don't exist yet (SPEC-BARRELS, post-#4). **Light-emitter seam (§8.4)**: `makeFireWraith` pushes `{source: e, radius: glowRadius×TILE}` into `G.lights` (the loader's already-reserved, previously-unused registry array) and `deathSweep`'s new `removeLight(e)` helper (keyed by `source ===`) cleans it up on death — `source` is a live entity reference, not a copied x/y, so #7 reads the Wraith's current position each frame with no re-sync needed. `test-enemies-wraith.js` (16) green; suite **552 total**. Roster still owed: Lobber, the Reaper, spawners, and arced ordnance.)
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 7 — **Lobber added** (§6.1.4, cover-seek, ADAPTS ADD `updateSorter`) + the `G.ebolts`/`updateEbolts` arced-ordnance system it is the sole producer of. `updateLobber` (`enemies-ai.js`) is **NOT an A\* navigator** — cover-seek via `moveBody`+`groundBlockerFilter` only, no `addNavigator`/`steerNavigator`, throttled LOS (`losCheckEvery` 0.12s, ADD). Exposed (`canSee`): panic-flee AWAY at `fleeMul(0.95×)` with an ADD-verbatim wandering-jitter angle, hold fire. In cover (`!canSee`): advance at `0.40×`, lob every `lobEvery(2.5s)` within `lobRange(9t)`. The lob is minted via a registered `registerLobberFire` seam (same register-callback shape as the Spider web/Shooter arrow, R6 — `enemies-ai.js` never imports `G.ebolts`) filled in `enemies.js`: pushes a `kind:"arc"` entry into `G.ebolts` (NOT a `Shot`/`G.shots` — E1) with `owner:"enemy"`, landing at the player's fire-time position **perturbed by a uniform-disc random offset within `G.ramp.lobberErrorRadius`** (net-new vs ADD's exact-target `fireEnemyArc` — sampled via `angle=rand·2π, radius=√rand·errR` for uniform area coverage, not center-biased). `updateEbolts` (`enemies.js`, replacing the Phase-3 no-op hook in step 7) is ADD `updateArc` ported near-verbatim: interpolates ground pos launch→landing over `dur(airtime 1.0s)`, parabolic `height` for the renderer, wall-agnostic in flight (never collides in transit); at `t≥dur` splats + AoE-tests the player ONLY at `blast(1.25t)+player.r` → `applyDamageToPlayer(2,"enemy-lob")` + the registered `detonateBarrelsInRadius` seam, then removes the entry. Self-contained in step 7 (not moved by `player.js`'s `updateShots` — arced ordnance is a distinct timed kind from a `Shot`, E1), so no cross-file frame-ordering assumption applies to it, unlike the straight-shot passes. `test-enemies-lobber.js` (15) green; suite **567 total**. Roster still owed: the Reaper and spawners.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
 incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
@@ -128,9 +128,27 @@ current or the next session starts blind.
   previously-unused registry array); `deathSweep`'s new `removeLight(e)`
   (matched by `source ===`) cleans it up on death; `source` is a live entity
   reference so #7 reads the current position every frame, no re-sync needed.
-  Tests: `test-enemies-wraith.js` (16, green). Roster still owed: Lobber, the
-  Reaper, spawners (E4), arced ordnance/`updateEbolts` (E1), and the Reaper
-  PHANTOM mover (R4).
+  Tests: `test-enemies-wraith.js` (16, green). **Phase 7 (Lobber + arced
+  ordnance) BUILT** — `updateLobber` (§6.1.4) added to `enemies-ai.js`: a
+  direct port of ADD's `updateSorter` two-branch cover-seek FSM (exposed→flee
+  with jitter+hold-fire; in-cover→advance+lob-on-cd), throttled LOS
+  (`losCheckEvery` 0.12s). **Deliberately NOT registered with the Phase-2 nav
+  layer** — cover-seek is `moveBody`+`groundBlockerFilter` only, no
+  `addNavigator`/`steerNavigator` call anywhere in `updateLobber` (it is not
+  one of the four A* classes). The lob is minted through a new
+  `registerLobberFire` seam (same shape as the Spider web/Shooter arrow
+  seams) filled in `enemies.js`: pushes a `kind:"arc"` `G.ebolts` entry
+  (**not** a `Shot` — E1 keeps arced ordnance a distinct timed kind from
+  `G.shots`) landing at the player's fire-time position perturbed by a
+  uniform-disc random offset within `G.ramp.lobberErrorRadius` (the net-new
+  accuracy-error mechanic vs ADD's exact-target `fireEnemyArc`, §12
+  provenance). `enemies.js`'s `updateEbolts` (step 7, replacing the Phase-3
+  no-op hook) is ADD `updateArc` ported near-verbatim: launch→landing
+  interpolation over `dur`, wall-agnostic in flight, AoE vs the player ONLY
+  at `blast+player.r` on landing, `applyDamageToPlayer(2,"enemy-lob")` + the
+  `detonateBarrelsInRadius` seam. Tests: `test-enemies-lobber.js` (15,
+  green). Roster still owed: the Reaper and spawners (E4). The Reaper's
+  PHANTOM mover (R4) remains unbuilt.
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -153,18 +171,24 @@ w.r.t. gameplay). `enemies-ai.js` (nav consumer layer + full roster of steerers:
 registry + repath scheduler + round-robin budget + dirty gate + waypoint
 steering + direct-steer fallback + `updateGhost`/`updateSkeleton`/
 `updateSpider`/`updateBat`/`updateZombie`/`updateSkeletonShooter`/
-`updateFireWraith` + the shared blocked-ε `isBlocked` helper +
-`registerSpiderWebFire`/`registerShooterFire` seams; imports
-config/state/world/nav only, sole consumer of `consumeDirtyTiles` [R1], never
-imported back [R6]). `enemies.js` (the combat spine + roster factories: 7-step
-`tickEnemies` + player-shot/melee/death-sweep/`awardKill`/knockback/enemy-shot
-passes + `makeGhost`/`makeSkeleton`/`makeSpider`/`makeBat`/`makeZombie`/
-`makeSkeletonShooter`/`makeFireWraith` factories + the Spider web-fire, Shooter
-arrow-fire, and `fireWraithAI`/`explodeFireWraith` EXPLODE-resolution callbacks
-(imports `projectiles.js` `makeShot`); `deathSweep` now calls `removeNavigator`
-for any `e.nav`-bearing enemy (Phase 5 fix) AND `removeLight` for any
-light-registered enemy (Phase 6, Wraith); new `registerBarrelDetonation` seam
-(no-op default, SPEC-BARRELS owed); imports
+`updateFireWraith`/`updateLobber` + the shared blocked-ε `isBlocked` helper +
+`registerSpiderWebFire`/`registerShooterFire`/`registerLobberFire` seams;
+imports config/state/world/nav only, sole consumer of `consumeDirtyTiles`
+[R1], never imported back [R6]; `updateLobber` is cover-seek only — it never
+calls `addNavigator`/`steerNavigator`, so it stays outside the A*-registry
+roster despite living in this file). `enemies.js` (the combat spine + roster
+factories: 7-step `tickEnemies` + player-shot/melee/death-sweep/`awardKill`/
+knockback/enemy-shot passes + `makeGhost`/`makeSkeleton`/`makeSpider`/
+`makeBat`/`makeZombie`/`makeSkeletonShooter`/`makeFireWraith`/`makeLobber`
+factories + the Spider web-fire, Shooter arrow-fire, and
+`fireWraithAI`/`explodeFireWraith` EXPLODE-resolution callbacks + the Lobber
+lob-fire seam (mints a `G.ebolts` `kind:"arc"` entry, error-radius perturbed)
+(imports `projectiles.js` `makeShot`); `updateEbolts` (step 7) is the ADD
+`updateArc` port — launch→landing interpolation, wall-agnostic flight,
+player-only AoE on landing + barrel seam; `deathSweep` now calls
+`removeNavigator` for any `e.nav`-bearing enemy (Phase 5 fix) AND
+`removeLight` for any light-registered enemy (Phase 6, Wraith); new
+`registerBarrelDetonation` seam (no-op default, SPEC-BARRELS owed); imports
 config/state/world/player-sinks/level-loader/projectiles/enemies-ai, never
 imported back [R6]). Tests:
 `test-config.js` (19), `test-enemies-config.js` (18), `test-world.js` (35),
@@ -173,11 +197,12 @@ imported back [R6]). Tests:
 `test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
 `test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66),
 `test-enemies-steer.js` (24), `test-enemies-ground.js` (15),
-`test-enemies-wraith.js` (16) —
-all green (**552 checks total**). Subsystems #1, #2, and #3 complete; #4
-(Enemies) has its foundation, nav consumer layer, combat spine, and 7 of 9
-roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire Wraith)
-built; Lobber, the Reaper, spawners, and arced ordnance still pending.
+`test-enemies-wraith.js` (16), `test-enemies-lobber.js` (15) —
+all green (**567 checks total**). Subsystems #1, #2, and #3 complete; #4
+(Enemies) has its foundation, nav consumer layer, combat spine, and 8 of 9
+roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire
+Wraith/Lobber)
+built; the Reaper and spawners still pending.
 
 ## Implementation sequencing (agreed order)
 
@@ -939,6 +964,68 @@ decisions:
   assignment); and a dirty-repath re-route parity check mirroring the Zombie's
   existing test.
 
+### 2026-07-05 — Lobber (cover-seek) + the `G.ebolts`/`updateEbolts` arced-ordnance system — Phase 7 (SPEC-ENEMIES)
+The Lobber (§6.1.4) is the ninth-and-final roster AI and the sole producer of
+the new arced-ordnance system it shares no code with the straight-shot
+(`G.shots`) pipeline (E1). Load-bearing decisions:
+- **Cover-seek, not A\* — deliberately excluded from the nav-consumer registry.**
+  `updateLobber` (`enemies-ai.js`) never calls `addNavigator`/`steerNavigator`;
+  it moves via plain `moveBody`+`groundBlockerFilter`, mirroring ADD's
+  `updateSorter` (a straight-line advance/flee, not a pathfinder). Per the
+  phase brief's own flag, this was checked against R1/R6 before writing code —
+  it needed no dirty-gate/round-robin interaction because it's not in
+  `navList` at all.
+- **ADD `updateSorter` ported near-verbatim** (§11/§12 provenance table):
+  `canSee` (throttled `losCheckEvery` 0.12s) → flee AWAY at `fleeMul(0.95×)`
+  with the exact ADD wandering-jitter formula (`e.wander += (rand−.5)·jitter·
+  dt·6`, `angle = away + sin(wander)·0.9`), hold fire; `!canSee` → advance at
+  `speedMul(0.40×)`, lob every `lobEvery(2.5s)` once within `lobRange(9t)`.
+  `fleeJitter` has no named spec dial (GDD/SPEC-ENEMIES give the *shape* of
+  the jitter, not its magnitude) — a `LOBBER_FLEE_JITTER = 1.0` constant was
+  added in `enemies-ai.js`, flagged inline as `(proposed)`, same posture as
+  other un-dialed constants in this codebase (e.g. the Shooter's
+  `WANDER_PICK_EVERY`). Not a build blocker.
+- **Lob-fire routed through a registered seam (`registerLobberFire`), not a
+  direct `G.ebolts` push from `enemies-ai.js`** — same shape as the Spider's
+  web and the Shooter's arrow seams, keeping this layer's import set at
+  config/state/world/nav only (R6, unchanged). `enemies.js` fills it: mints a
+  `kind:"arc"`, `owner:"enemy"` `G.ebolts` entry (**not** a `Shot` — E1's
+  explicit divergence: straight enemy shots fold into `G.shots` with an owner
+  tag, but arced ordnance keeps ADD's separate-array model).
+- **The accuracy-error perturbation (net-new vs ADD) samples uniformly over
+  the error-radius DISC, not just a random angle at a fixed radius.** ADD's
+  `fireEnemyArc` targets the exact position; the spec's net-new mechanic is a
+  "random offset within `G.ramp.lobberErrorRadius`." A naive `radius = rand()
+  × errR` biases samples toward the center (area ∝ r², so small radii are
+  over-represented); `radius = √rand() × errR` (with a uniform angle) makes
+  the sample uniform over the disc's *area* — a deliberate correctness choice
+  for the "perturbed within" wording, not a play-feel tuning knob.
+- **`updateEbolts` is ADD `updateArc` ported near-verbatim** — ground position
+  interpolates launch→landing over `dur`, wall-agnostic for the entire flight
+  (the loop never tests `isWall`/blockers mid-transit — only the landing splat
+  runs an AoE check), parabolic `height` computed for a future renderer. AoE
+  on landing tests the player ONLY at `blast + player.r` (§9 — arced ordnance,
+  like straight enemy shots, never hits other enemies) and calls the
+  `detonateBarrelsInRadius` seam (already registered by Phase 6, unconditional
+  no-op today since barrels don't exist).
+- **Self-contained in step 7 — no cross-file frame-ordering assumption, unlike
+  the straight-shot passes.** `updateEbolts` both advances position AND
+  resolves the AoE/removal in the same call (step 7), whereas the
+  enemy-shot→player pass (also step 7) depends on `player.js`'s `updateShots`
+  having already moved the shot earlier in the frame. Flagged in the phase
+  brief and verified here: `G.ebolts` entries are never touched by
+  `player.js`, so no such dependency exists for this system.
+- **Test seam note:** `test-enemies-lobber.js` (15 checks) drives the REAL
+  `tickEnemies` spine end-to-end. Covers: factory shape; exposed→flee (distance
+  from the player grows, zero ebolts minted — hold-fire proven by absence, not
+  a flag read); in-cover behind an intervening wall→advances + lobs at least
+  once within a bounded frame budget; the lob's shape (`G.shots` stays empty —
+  proves the E1 separation — one `G.ebolts` entry with the right `kind`/`dur`/
+  `blast`/`dmg`) and its landing point within `lobberErrorRadius` of the
+  player's fire-time position; `updateEbolts` mid-flight (no damage, entry
+  still live) vs. post-landing (AoE damage lands THROUGH an intervening wall,
+  entry removed, barrel seam called with the landing point/radius/cause).
+
 ## Known open items (non-blocking for build)
 
 Tuning / design-feel only — none block implementing the mechanism:
@@ -1691,3 +1778,48 @@ decision tick" as the LOS-throttle cadence rather than every frame (consistent
 with the Lobber's already-established `losCheckEvery` pattern). Owed by later
 phases: Lobber, Fire Wraith, the Reaper (PHANTOM, R4), spawners (E4), arced
 ordnance (`updateEbolts`, E1). No git.
+
+### 2026-07-05 — Phase 6 (`enemies.js`/`enemies-ai.js` — Fire Wraith + barrel/light seams)
+
+Built the Fire Wraith (§6.1.8) — `updateFireWraith` FSM `APPROACH→FLASH` in
+`enemies-ai.js` (the third GROUND A* consumer, riding the same
+`addNavigator`/`steerNavigator` machinery as the Zombie/Skeleton Shooter) +
+`fireWraithAI`/`explodeFireWraith` in `enemies.js` (the EXPLODE resolution,
+deferred to AFTER the whole step-6 AI loop so it never mutates `G.enemies`
+mid-iteration). Added the `registerBarrelDetonation` seam (no-op default,
+SPEC-BARRELS owed) and the `G.lights` light-emitter seam (§8.4, live entity
+reference, cleaned up by `deathSweep`'s new `removeLight`). Full writeup in
+the Decision log section above. `test-enemies-wraith.js` (16 checks, green);
+full suite 552. No git.
+
+### 2026-07-05 — Phase 7 (`enemies.js`/`enemies-ai.js` — Lobber + arced ordnance)
+
+Built the Lobber (§6.1.4, the ninth and final roster AI) and the
+`G.ebolts`/`updateEbolts` arced-ordnance system it is the sole producer of.
+`updateLobber` (`enemies-ai.js`) ports ADD's `updateSorter` two-branch
+cover-seek FSM near-verbatim (exposed→flee-with-jitter+hold-fire; in-cover→
+advance+lob-on-cd) — deliberately NOT registered with the Phase-2 nav
+consumer layer (no `addNavigator`/`steerNavigator` call; cover-seek is plain
+`moveBody`+`groundBlockerFilter`). The lob is minted through a new
+`registerLobberFire` seam (same register-callback shape as the Spider
+web/Shooter arrow seams, R6 upheld) filled in `enemies.js`: a `kind:"arc"`,
+`owner:"enemy"` `G.ebolts` entry — NOT a `Shot` (E1) — landing at the
+player's fire-time position perturbed by a uniform-disc random offset within
+`G.ramp.lobberErrorRadius` (the net-new accuracy-error mechanic vs ADD's
+exact-target `fireEnemyArc`; sampled via `radius=√rand×errR` for true
+disc-area uniformity, not a naive linear-radius sample that would bias
+toward the center). `updateEbolts` (replacing the Phase-3 no-op hook in step
+7) is ADD's `updateArc` ported near-verbatim: launch→landing interpolation
+over `dur`, wall-agnostic in flight, player-only AoE on landing + the
+barrel-detonation seam. Full writeup in the Decision log section above.
+
+**No design gaps requiring a stop-and-surface.** All config fields needed
+(`CFG.ENEMY.lobber.*`, `G.ramp.lobberErrorRadius`) already existed from
+earlier phases (Phase 1/3 of this spec). One implementation choice is
+flagged as proposed-not-spec-given (low-stakes, tuning-only): the flee-jitter
+magnitude constant (`LOBBER_FLEE_JITTER = 1.0`) — the GDD/spec describe the
+jitter's *shape* (ADD's formula) but never name its magnitude dial.
+
+`test-enemies-lobber.js` (15 checks, green); full suite **567 checks total**,
+all green. Roster (§6.1) is now 8 of 9 built — only the Reaper (§6.1.9,
+PHANTOM mini-boss summoner, R4) remains, plus spawners (E4). No git.
