@@ -1,6 +1,33 @@
 # STATUS — Repossessed
 
-**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 7 — **Lobber added** (§6.1.4, cover-seek, ADAPTS ADD `updateSorter`) + the `G.ebolts`/`updateEbolts` arced-ordnance system it is the sole producer of. `updateLobber` (`enemies-ai.js`) is **NOT an A\* navigator** — cover-seek via `moveBody`+`groundBlockerFilter` only, no `addNavigator`/`steerNavigator`, throttled LOS (`losCheckEvery` 0.12s, ADD). Exposed (`canSee`): panic-flee AWAY at `fleeMul(0.95×)` with an ADD-verbatim wandering-jitter angle, hold fire. In cover (`!canSee`): advance at `0.40×`, lob every `lobEvery(2.5s)` within `lobRange(9t)`. The lob is minted via a registered `registerLobberFire` seam (same register-callback shape as the Spider web/Shooter arrow, R6 — `enemies-ai.js` never imports `G.ebolts`) filled in `enemies.js`: pushes a `kind:"arc"` entry into `G.ebolts` (NOT a `Shot`/`G.shots` — E1) with `owner:"enemy"`, landing at the player's fire-time position **perturbed by a uniform-disc random offset within `G.ramp.lobberErrorRadius`** (net-new vs ADD's exact-target `fireEnemyArc` — sampled via `angle=rand·2π, radius=√rand·errR` for uniform area coverage, not center-biased). `updateEbolts` (`enemies.js`, replacing the Phase-3 no-op hook in step 7) is ADD `updateArc` ported near-verbatim: interpolates ground pos launch→landing over `dur(airtime 1.0s)`, parabolic `height` for the renderer, wall-agnostic in flight (never collides in transit); at `t≥dur` splats + AoE-tests the player ONLY at `blast(1.25t)+player.r` → `applyDamageToPlayer(2,"enemy-lob")` + the registered `detonateBarrelsInRadius` seam, then removes the entry. Self-contained in step 7 (not moved by `player.js`'s `updateShots` — arced ordnance is a distinct timed kind from a `Shot`, E1), so no cross-file frame-ordering assumption applies to it, unlike the straight-shot passes. `test-enemies-lobber.js` (15) green; suite **567 total**. Roster still owed: the Reaper and spawners.)
+**Last updated:** 2026-07-05 (SPEC-ENEMIES Phase 8 — **The Reaper added** (§6.1.9,
+E9): PHANTOM A\* mini-boss summoner. `updateReaper` (`enemies-ai.js`) registers as a
+nav navigator with `NAV_MASK.PHANTOM` + a **bespoke phantom mover** — the ONE
+navigator whose mover is NOT `world.moveBody` (a deliberate, documented exception to
+"moveBody is the one mover"; §0.1/R4 — see decision log; `world.js` left untouched).
+`phantomMover` slides per-axis against `bodyHitsBlocker(reaperBlockerFilter)` —
+crates+barrels ONLY (`reaperBlockerFilter = e.type!=="spawner"`), **never**
+`bodyHitsWall` and never spawners, so it follows a wall-crossing PHANTOM path without
+wedging (nav.js routes PHANTOM through walls+spawners, blocked only by crates/barrels,
+so the mover must match). Summon (every `G.ramp.reaperSummonInterval` 6→3.5 s) and
+dark-blast (every 9 s FIXED) are minted via new `registerReaperSummon`/
+`registerReaperBlast` seams (same register-callback shape, R6 — `enemies-ai.js` never
+imports the factories/`projectiles`) filled in `enemies.js`: summon picks
+`["ghost","ghost","skeleton"]` → 2 Ghosts or 1 Skeleton at the Reaper's tile, tagged
+`originSpawner = reaper.id`, capped at `minionCap` 6 via a live `G.enemies` scan at the
+emit decision (E4, no mutable counter) that counts emergence-window children (R5,
+`spawn` = spawner.emerge 0.5 s); blast is `makeShot(owner:"enemy", dmg 3, speed 224
+[=7 t/s], maxTravel blastRange=448px [14 t, the R7 dial], effect:"damage")` at the
+player that rides `player.js updateShots` (crate-ricochet + non-bounce wall fizzle) and
+whose damage the spine's step-7 `enemyShotPlayerPass` applies. #5 flags exposed:
+`e.boss=true` (set generically by `makeEnemy` from `cfg.boss`) + `e.resist={nova:true,
+lightning:true}` — a value-free MARKER #5 reads instead of a hardcoded type check; #5
+applies the 10/20 (Nova) and 5 (Lightning) magnitudes. Reaper death emits `boss:killed`
+FX (screen-shake+hit-stop, #7/#10) keyed on `e.boss`. Reaper knockback also routes
+through `phantomMover` (new `nav==="phantom"` branch in `integrateEnemyKnockback`, so a
+melee knockback can't wedge it on a wall it phases through). `test-enemies-reaper.js`
+(24) green; suite **591 total**. Roster still owed: **spawners** only.)
+(SPEC-ENEMIES Phase 7 — **Lobber added** (§6.1.4, cover-seek, ADAPTS ADD `updateSorter`) + the `G.ebolts`/`updateEbolts` arced-ordnance system it is the sole producer of. `updateLobber` (`enemies-ai.js`) is **NOT an A\* navigator** — cover-seek via `moveBody`+`groundBlockerFilter` only, no `addNavigator`/`steerNavigator`, throttled LOS (`losCheckEvery` 0.12s, ADD). Exposed (`canSee`): panic-flee AWAY at `fleeMul(0.95×)` with an ADD-verbatim wandering-jitter angle, hold fire. In cover (`!canSee`): advance at `0.40×`, lob every `lobEvery(2.5s)` within `lobRange(9t)`. The lob is minted via a registered `registerLobberFire` seam (same register-callback shape as the Spider web/Shooter arrow, R6 — `enemies-ai.js` never imports `G.ebolts`) filled in `enemies.js`: pushes a `kind:"arc"` entry into `G.ebolts` (NOT a `Shot`/`G.shots` — E1) with `owner:"enemy"`, landing at the player's fire-time position **perturbed by a uniform-disc random offset within `G.ramp.lobberErrorRadius`** (net-new vs ADD's exact-target `fireEnemyArc` — sampled via `angle=rand·2π, radius=√rand·errR` for uniform area coverage, not center-biased). `updateEbolts` (`enemies.js`, replacing the Phase-3 no-op hook in step 7) is ADD `updateArc` ported near-verbatim: interpolates ground pos launch→landing over `dur(airtime 1.0s)`, parabolic `height` for the renderer, wall-agnostic in flight (never collides in transit); at `t≥dur` splats + AoE-tests the player ONLY at `blast(1.25t)+player.r` → `applyDamageToPlayer(2,"enemy-lob")` + the registered `detonateBarrelsInRadius` seam, then removes the entry. Self-contained in step 7 (not moved by `player.js`'s `updateShots` — arced ordnance is a distinct timed kind from a `Shot`, E1), so no cross-file frame-ordering assumption applies to it, unlike the straight-shot passes. `test-enemies-lobber.js` (15) green; suite **567 total**. Roster still owed: the Reaper and spawners.)
 **State in one line:** **Subsystems #1 (Level loader + generator), #2 (Player,
 incl. crates §7.1), and #3 (Pathfinding) are BUILT and tested headlessly.**
 `nav.js` is complete: infrastructure (masks/occupancy/dirty/seam, Phase 1) +
@@ -147,8 +174,23 @@ current or the next session starts blind.
   interpolation over `dur`, wall-agnostic in flight, AoE vs the player ONLY
   at `blast+player.r` on landing, `applyDamageToPlayer(2,"enemy-lob")` + the
   `detonateBarrelsInRadius` seam. Tests: `test-enemies-lobber.js` (15,
-  green). Roster still owed: the Reaper and spawners (E4). The Reaper's
-  PHANTOM mover (R4) remains unbuilt.
+  green). **Phase 8 (The Reaper) BUILT** — `updateReaper` (§6.1.9) added to
+  `enemies-ai.js`: registers as a `NAV_MASK.PHANTOM` navigator with a **bespoke
+  phantom mover** (`phantomMover` + `reaperBlockerFilter`, both exported) — the
+  ONLY navigator not using `world.moveBody`, checking `bodyHitsBlocker`
+  (crates+barrels only) and never `bodyHitsWall` (R4/§0.1, documented exception;
+  `world.js` untouched). Rides the Phase-2 scheduler/steer machinery (PHANTOM
+  waypoints cross walls). Summon on `G.ramp.reaperSummonInterval` + dark-blast
+  every 9 s fixed via the `registerReaperSummon`/`registerReaperBlast` seams (R6)
+  filled in `enemies.js` (pick 2 Ghosts/1 Skeleton tagged
+  `originSpawner=reaper.id`, cap 6 via a scan counting emergence-window children
+  [E4/R5]; blast = enemy `makeShot` dmg 3 / maxTravel 448 px [R7 dial] riding
+  `updateShots`). `makeReaper` factory (overrides the loader's inert placeholder)
+  sets `e.id`, `e.boss`, `e.resist` (the E9 flags for #5). `deathSweep` emits
+  `boss:killed` FX (screen-shake/hit-stop, keyed on `e.boss`);
+  `integrateEnemyKnockback` gained a `nav==="phantom"` branch (Reaper knockback
+  uses `phantomMover`, not `groundMover`). Tests: `test-enemies-reaper.js` (24,
+  green). Roster still owed: **spawners** only (E4).
 - [ ] §5 Abilities — Nova, Lightning, gem economy
 - [ ] §3 Power-ups & pickups
 - [ ] §12 Meta — menu, pause, options, 5-slot save/load, achievements, high score
@@ -171,23 +213,32 @@ w.r.t. gameplay). `enemies-ai.js` (nav consumer layer + full roster of steerers:
 registry + repath scheduler + round-robin budget + dirty gate + waypoint
 steering + direct-steer fallback + `updateGhost`/`updateSkeleton`/
 `updateSpider`/`updateBat`/`updateZombie`/`updateSkeletonShooter`/
-`updateFireWraith`/`updateLobber` + the shared blocked-ε `isBlocked` helper +
-`registerSpiderWebFire`/`registerShooterFire`/`registerLobberFire` seams;
+`updateFireWraith`/`updateLobber`/`updateReaper` + the shared blocked-ε
+`isBlocked` helper + the bespoke `phantomMover`/`reaperBlockerFilter` (R4) +
+`registerSpiderWebFire`/`registerShooterFire`/`registerLobberFire`/
+`registerReaperSummon`/`registerReaperBlast` seams;
 imports config/state/world/nav only, sole consumer of `consumeDirtyTiles`
 [R1], never imported back [R6]; `updateLobber` is cover-seek only — it never
 calls `addNavigator`/`steerNavigator`, so it stays outside the A*-registry
-roster despite living in this file). `enemies.js` (the combat spine + roster
+roster despite living in this file; `updateReaper` IS an A*-registry navigator
+but supplies `phantomMover` as its mover — the sole navigator not using
+`world.moveBody`). `enemies.js` (the combat spine + roster
 factories: 7-step `tickEnemies` + player-shot/melee/death-sweep/`awardKill`/
 knockback/enemy-shot passes + `makeGhost`/`makeSkeleton`/`makeSpider`/
-`makeBat`/`makeZombie`/`makeSkeletonShooter`/`makeFireWraith`/`makeLobber`
+`makeBat`/`makeZombie`/`makeSkeletonShooter`/`makeFireWraith`/`makeLobber`/
+`makeReaper`
 factories + the Spider web-fire, Shooter arrow-fire, and
 `fireWraithAI`/`explodeFireWraith` EXPLODE-resolution callbacks + the Lobber
-lob-fire seam (mints a `G.ebolts` `kind:"arc"` entry, error-radius perturbed)
-(imports `projectiles.js` `makeShot`); `updateEbolts` (step 7) is the ADD
+lob-fire seam (mints a `G.ebolts` `kind:"arc"` entry, error-radius perturbed) +
+the Reaper summon/blast seams (mint tagged minions capped at 6 / an enemy
+`makeShot` dark-blast) (imports `projectiles.js` `makeShot`); `updateEbolts`
+(step 7) is the ADD
 `updateArc` port — launch→landing interpolation, wall-agnostic flight,
 player-only AoE on landing + barrel seam; `deathSweep` now calls
 `removeNavigator` for any `e.nav`-bearing enemy (Phase 5 fix) AND
-`removeLight` for any light-registered enemy (Phase 6, Wraith); new
+`removeLight` for any light-registered enemy (Phase 6, Wraith) AND emits
+`boss:killed` FX for `e.boss` (Phase 8, Reaper); `integrateEnemyKnockback` routes
+`nav==="phantom"` knockback through `phantomMover` (Phase 8); new
 `registerBarrelDetonation` seam (no-op default, SPEC-BARRELS owed); imports
 config/state/world/player-sinks/level-loader/projectiles/enemies-ai, never
 imported back [R6]). Tests:
@@ -197,12 +248,13 @@ imported back [R6]). Tests:
 `test-input.js` (19), `test-player.js` (108), `test-projectiles.js` (17),
 `test-nav.js` (36), `test-enemies-nav.js` (24), `test-enemies-combat.js` (66),
 `test-enemies-steer.js` (24), `test-enemies-ground.js` (15),
-`test-enemies-wraith.js` (16), `test-enemies-lobber.js` (15) —
-all green (**567 checks total**). Subsystems #1, #2, and #3 complete; #4
-(Enemies) has its foundation, nav consumer layer, combat spine, and 8 of 9
+`test-enemies-wraith.js` (16), `test-enemies-lobber.js` (15),
+`test-enemies-reaper.js` (24) —
+all green (**591 checks total**). Subsystems #1, #2, and #3 complete; #4
+(Enemies) has its foundation, nav consumer layer, combat spine, and all 9
 roster types (Ghost/Skeleton/Spider/Bat/Zombie/Skeleton Shooter/Fire
-Wraith/Lobber)
-built; the Reaper and spawners still pending.
+Wraith/Lobber/Reaper)
+built; only spawners still pending.
 
 ## Implementation sequencing (agreed order)
 
@@ -1823,3 +1875,71 @@ jitter's *shape* (ADD's formula) but never name its magnitude dial.
 `test-enemies-lobber.js` (15 checks, green); full suite **567 checks total**,
 all green. Roster (§6.1) is now 8 of 9 built — only the Reaper (§6.1.9,
 PHANTOM mini-boss summoner, R4) remains, plus spawners (E4). No git.
+
+### 2026-07-05 — Phase 8 (`enemies.js`/`enemies-ai.js` — The Reaper + the bespoke PHANTOM mover)
+
+Built the Reaper (§6.1.9, E9), the ninth and final roster AI — a PHANTOM A\*
+mini-boss summoner placed by level defs only (`makeReaper` overrides the loader's
+inert `blocks:false` placeholder). Load-bearing decisions:
+
+- **§0.1 / R4 — the bespoke PHANTOM mover is a DELIBERATE, DOCUMENTED EXCEPTION
+  to "moveBody is the one mover."** `updateReaper` registers as a `NAV_MASK.PHANTOM`
+  navigator on the Phase-2 layer (so it rides the shared scheduler / round-robin
+  budget / waypoint steering), but supplies `phantomMover` — NOT `world.moveBody` —
+  as its per-navigator mover. The reasoning (per the phase brief): `world.moveBody`
+  ALWAYS calls `bodyHitsWall` (the blocker filter never governs walls), so it would
+  wedge a wall-crossing PHANTOM path at the first wall `findPath` told the Reaper to
+  enter. `phantomMover` (in `enemies-ai.js`, next to `updateReaper`) slides per-axis
+  against `bodyHitsBlocker(reaperBlockerFilter)` ONLY — crates+barrels
+  (`reaperBlockerFilter = e.type !== "spawner"`), never `bodyHitsWall`, never
+  spawners. This matches `nav.js`'s occupancy (spawners are in `occGround` only, so
+  `findPath(..., PHANTOM)` routes THROUGH walls+spawners, blocked only by
+  crates/barrels — the mover filter must match the mask or the Reaper desyncs from
+  its own path). The four A\* filters are NOT interchangeable; this is the sole
+  crates+barrels-only one. **`world.js` is left completely untouched by this phase**
+  (the §0.1 ruling: a contained per-navigator mover is preferable to widening the
+  shared leaf for the one PHANTOM mover). Regression-guarded by
+  `test-enemies-reaper.js`: `phantomMover` crosses a full wall column without
+  wedging, is blocked by a crate, passes through a spawner; and a behavioral test
+  drives the Reaper across a full-height wall column to reach a player a GROUND
+  enemy could never touch.
+- **R4 also applies to knockback.** `integrateEnemyKnockback` (`enemies.js`) gained a
+  `cfg.nav === "phantom"` branch that routes the Reaper's melee knockback through
+  `phantomMover`, not `groundMover` — otherwise a melee knockback could wedge the
+  Reaper on a wall it phases through. (flight → raw add; phantom → `phantomMover`;
+  else → `groundMover`.)
+- **Summon (E4/R5) + blast (R3/R7) via register-callback seams (R6).** `updateReaper`
+  owns only the timers; the mints go through new `registerReaperSummon`/
+  `registerReaperBlast` seams filled in `enemies.js` (so `enemies-ai.js` never imports
+  the loose-enemy factories or `projectiles`/`G.shots`). Summon (every
+  `G.ramp.reaperSummonInterval`, 6→3.5 s ramp) picks `["ghost","ghost","skeleton"]` →
+  2 Ghosts or 1 Skeleton at the Reaper's tile, each tagged `originSpawner = reaper.id`
+  and given `spawn = spawner.emerge` (0.5 s emergence gate). The `minionCap` (6) is a
+  **live scan of `G.enemies` for the tag at the emit decision** (E4 — no mutable
+  counter), and the running count includes freshly-added minions so a single summon
+  can't overshoot; the scan is `spawn`-state-agnostic, so it counts emergence-window
+  children (R5). Blast (every 9 s FIXED, independent of the ramped summon) is a
+  straight `makeShot(owner:"enemy", dmg 3, speed 224 [=7 t/s], maxTravel
+  blastRange=448 px [14 t — the R7 dial, already in config], effect:"damage")` aimed
+  at the player; it's LOS-irrelevant to fire but the shot rides `player.js`'s
+  `updateShots` (crate-ricochet + non-bounce wall fizzle) and its damage is applied by
+  the spine's step-7 `enemyShotPlayerPass`. The Reaper needed a stable `e.id`
+  (monotonic counter in `enemies.js`) as the tag source — the first entity to carry
+  one (spawners, E4, will need the same when built).
+- **#5 flags exposed (E9), values deferred.** `e.boss = true` (set generically by
+  `makeEnemy` from `cfg.boss`) + `e.resist = {nova:true, lightning:true}` — a
+  value-free MARKER #5 reads instead of a hardcoded `type === "reaper"` check. This
+  phase ONLY exposes the flag; #5 applies the 10/20 (Nova dmg/ring) and 5 (Lightning)
+  magnitudes. Death emits a new `boss:killed` FX event (screen-shake + hit-stop,
+  #7/#10) from `deathSweep`, keyed on `e.boss` (not a type check) so any future boss
+  gets the FX.
+
+**No design gaps requiring a stop-and-surface.** Every config field needed
+(`CFG.ENEMY.reaper.*` including the `blastRange: 448` R7 dial and `summon.pick`/
+`minionCap`, `G.ramp.reaperSummonInterval`) already existed from Phase 1/3. The
+`boss:killed` event name is the one net-new string (the spec names the FX but not
+the event key; chosen to match the `noun:verb` convention and keyed on `e.boss`).
+
+`test-enemies-reaper.js` (24 checks, green); full suite **591 checks total**, all
+green. Roster (§6.1) is now COMPLETE — 9 of 9 built; only spawners (E4) remain in
+subsystem #4. No git.

@@ -687,3 +687,86 @@ export function updateSkeletonShooter(e, player, dt) {
   }
   steerNavigator(e, player, dt);
 }
+
+/* ---- Reaper: PHANTOM A*, the bespoke phantom mover (§6.1.9, §4, R4) ------ *
+   The mini-boss summoner. It A*-routes over NAV_MASK.PHANTOM — findPath already
+   ignores walls/terrain/spawners for this mask (nav.js adds spawners to occGround
+   ONLY), so its path is blocked ONLY by crates/barrels. It rides the SAME Phase-2
+   scheduler/steer machinery as the GROUND navigators (addNavigator + steerNavigator).
+
+   ---- §0.1 / R4: THE BESPOKE PHANTOM MOVER (a documented exception) --------
+   The Reaper is the ONLY navigator whose mover is NOT world.moveBody. moveBody
+   ALWAYS calls bodyHitsWall (the blocker filter never governs walls), so it would
+   wedge the Reaper at the first wall its PHANTOM path told it to enter. This
+   per-navigator mover checks ONLY bodyHitsBlocker with a crates+barrels filter —
+   never bodyHitsWall, never spawners (nav.js routes PHANTOM THROUGH spawners, so
+   the mover MUST let them pass or it desyncs from the path). The four A* filters
+   are NOT interchangeable; this is the sole crates+barrels-only one. This is a
+   deliberate, documented exception to "moveBody is the one mover" (STATUS.md).
+   world.js is left untouched by this phase. */
+
+// Crates+barrels-only blocker filter (§4). Rejects spawners (type "spawner") —
+// the only spawner entities live in G.spawners, which bodyHitsBlocker scans, so
+// the type test is the discriminator; crates/barrels pass the filter and block.
+export function reaperBlockerFilter(e) { return e.type !== "spawner"; }
+
+// The bespoke PHANTOM mover (R4). Per-axis slide against crates+barrels ONLY;
+// NO bodyHitsWall (the Reaper's path crosses walls) and NO spawner block.
+export function phantomMover(e, dx, dy) {
+  if (dx) {
+    e.x += dx;
+    if (bodyHitsBlocker(e.x, e.y, e.r, reaperBlockerFilter)) e.x -= dx;
+  }
+  if (dy) {
+    e.y += dy;
+    if (bodyHitsBlocker(e.x, e.y, e.r, reaperBlockerFilter)) e.y -= dy;
+  }
+}
+
+const REAPER_BLAST_EVERY = 9.0;   // s — fixed dark-blast cadence (§6.1.9)
+
+// Summon/blast are minted through registered seams (same shape as the Spider web
+// / Shooter arrow / Lobber lob) so this layer never imports the entity factories
+// or projectiles/G.shots (R6). enemies.js fills them at boot.
+let reaperSummon = () => {};
+export function registerReaperSummon(fn) { reaperSummon = fn; }
+let reaperBlast = () => {};
+export function registerReaperBlast(fn) { reaperBlast = fn; }
+
+function initReaperState(e) {
+  const s = e.reaperAI || (e.reaperAI = {});
+  if (s.summonCd === undefined) {
+    // First summon after one full interval; blast on the fixed 9 s clock.
+    s.summonCd = (G.ramp && G.ramp.reaperSummonInterval) || 6.0;
+    s.blastCd = REAPER_BLAST_EVERY;
+  }
+  return s;
+}
+
+export function updateReaper(e, player, dt) {
+  const s = initReaperState(e);
+  if (!recByEntity.has(e)) addNavigator(e, NAV_MASK.PHANTOM, phantomMover);
+
+  // PHANTOM A* toward the player — the bespoke mover crosses walls (R4).
+  steerNavigator(e, player, dt);
+
+  // Summon on the ramped interval (E10 dial). The seam scans G.enemies for the
+  // originSpawner tag at the emit decision and enforces the live cap (E4) — no
+  // mutable counter here; this layer just owns the cadence.
+  s.summonCd -= dt;
+  if (s.summonCd <= 0) {
+    reaperSummon(e);
+    s.summonCd = (G.ramp && G.ramp.reaperSummonInterval) || 6.0;
+  }
+
+  // Dark blast every 9 s (fixed): straight at the player, LOS-irrelevant (the
+  // Reaper ignores walls) — but the shot itself rides updateShots and collides
+  // with terrain/crates normally (R7 range dial caps it; R3 owner:"enemy").
+  s.blastCd -= dt;
+  if (s.blastCd <= 0) {
+    const dx = player.x - e.x, dy = player.y - e.y;
+    const d = Math.hypot(dx, dy) || 1;
+    reaperBlast(e, dx / d, dy / d);
+    s.blastCd = REAPER_BLAST_EVERY;
+  }
+}

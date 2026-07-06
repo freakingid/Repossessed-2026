@@ -38,9 +38,10 @@ import {
 import { emit, registerEntityFactory } from "./level-loader.js";
 import { makeShot } from "./projectiles.js";
 import {
-  scheduleRepaths, groundMover, updateGhost, updateSkeleton, updateSpider,
-  updateBat, updateZombie, updateSkeletonShooter, updateFireWraith, updateLobber,
-  registerSpiderWebFire, registerShooterFire, registerLobberFire, removeNavigator,
+  scheduleRepaths, groundMover, phantomMover, updateGhost, updateSkeleton, updateSpider,
+  updateBat, updateZombie, updateSkeletonShooter, updateFireWraith, updateLobber, updateReaper,
+  registerSpiderWebFire, registerShooterFire, registerLobberFire,
+  registerReaperSummon, registerReaperBlast, removeNavigator,
 } from "./enemies-ai.js";
 
 // Spider web-fire seam (§6.1.6) — enemies-ai.js's updateSpider calls this to
@@ -97,6 +98,49 @@ registerLobberFire((e, tx, ty) => {
   });
 });
 
+// Reaper summon seam (§6.1.9/E4/R5) — enemies-ai.js's updateReaper calls this on
+// the ramped interval; the mint lives here (needs the loose-enemy factories +
+// G.enemies), so enemies-ai.js never imports them (R6). Pick one of
+// ["ghost","ghost","skeleton"]: "ghost" spawns 2 Ghosts, "skeleton" spawns 1
+// Skeleton, at the Reaper's tile, tagged originSpawner = this Reaper's id. The
+// live cap (minionCap 6) is a SCAN of G.enemies for the tag at the emit decision
+// (E4 — no mutable counter), COUNTING emergence-window children (R5 — the scan is
+// state-agnostic, and freshly-added minions increment the running count so a
+// single summon can never overshoot the cap). Minions emerge via the shared 0.5 s
+// spawn gate (spawner.emerge).
+registerReaperSummon((reaper) => {
+  const cfg = CFG.ENEMY.reaper;
+  const pick = cfg.summon.pick[(Math.random() * cfg.summon.pick.length) | 0];
+  const make = pick === "ghost" ? makeGhost : makeSkeleton;
+  const count = pick === "ghost" ? 2 : 1;
+  const tx = (reaper.x / CFG.TILE) | 0, ty = (reaper.y / CFG.TILE) | 0;
+  // Live tagged minions, INCLUDING those still in their emergence window (R5).
+  let live = 0;
+  for (const en of G.enemies) if (en.originSpawner === reaper.id) live++;
+  for (let k = 0; k < count && live < cfg.summon.minionCap; k++) {
+    const minion = make({ type: pick, x: tx, y: ty, originSpawner: reaper.id });
+    minion.spawn = CFG.ENEMY.spawner.emerge;   // 0.5 s emergence gate (E4)
+    G.enemies.push(minion);
+    live++;
+  }
+});
+
+// Reaper dark-blast seam (§6.1.9/R3/R7) — a straight makeShot at the player.
+// owner:"enemy" (R3), dmg blastDmg(3), speed blastSpeedMul×player-speed (=224 px/s
+// = 7 t/s), maxTravel blastRange (the R7 dial, already in px), effect "damage". It
+// joins G.shots and rides player.js updateShots like any straight shot (crate
+// ricochet + non-bounce wall fizzle); enemyShotPlayerPass applies its damage.
+registerReaperBlast((e, ux, uy) => {
+  const cfg = CFG.ENEMY.reaper;
+  G.shots.push(makeShot({
+    x: e.x, y: e.y,
+    vx: ux * cfg.blastSpeedMul * CFG.PLAYER.speed,
+    vy: uy * cfg.blastSpeedMul * CFG.PLAYER.speed,
+    r: 6, dmg: cfg.blastDmg, owner: "enemy",
+    maxTravel: cfg.blastRange, effect: "damage",
+  }));
+});
+
 // Barrel-detonation seam (§7) — barrels don't exist yet (SPEC-BARRELS is
 // post-#4); mirrors the loader's registered-sink pattern (registerBlockerSink)
 // so the Wraith's EXPLODE (and later the Lobber's lob) can call into barrel
@@ -118,6 +162,7 @@ const aiByType = new Map([
   ["skeletonShooter", updateSkeletonShooter],
   ["fireWraith", fireWraithAI],
   ["lobber", updateLobber],
+  ["reaper", updateReaper],
 ]);
 
 // Test seam (structural R2 frame-order proof): inject a synthetic type's AI so a
@@ -181,6 +226,25 @@ registerEntityFactory("skeletonShooter", makeSkeletonShooter);
 export function makeLobber(p) { return makeEnemy("lobber", p); }
 registerEntityFactory("lobber", makeLobber);
 
+// Stable per-Reaper id — the summon tags each minion originSpawner = this id, and
+// the cap scan matches on it (E4). Monotonic; unique per spawned Reaper.
+let nextReaperId = 1;
+
+// The Reaper (§6.1.9, E9) — PHANTOM A* mini-boss summoner, placed by level defs
+// only (the loader ships an inert blocks:false placeholder this override
+// replaces). Beyond the base enemy it carries: a stable `id` (for minion
+// originSpawner tagging + the cap scan), and the #5 flags — `boss` (already set
+// by makeEnemy from cfg.boss) plus `resist`, an ability-resist MARKER Nova/
+// Lightning read INSTEAD of a hardcoded type check (E9). This phase only EXPOSES
+// the flag; #5 applies the 10/20 (Nova) and 5 (Lightning) magnitudes.
+export function makeReaper(p) {
+  const e = makeEnemy("reaper", p);
+  e.id = nextReaperId++;
+  e.resist = { nova: true, lightning: true };
+  return e;
+}
+registerEntityFactory("reaper", makeReaper);
+
 // Fire Wraith self-glow (§8.4, dark levels) — a seam to #7: register the light
 // emitter here (no draw code). G.lights is the loader's already-reserved
 // light-emitter registry array (cleared with the other transients on load).
@@ -218,6 +282,8 @@ function integrateEnemyKnockback(e, dt) {
   const cfg = CFG.ENEMY[e.type];
   if (cfg && cfg.nav === "flight") {
     e.x += dx; e.y += dy;              // raw nudge, no collision (R8)
+  } else if (cfg && cfg.nav === "phantom") {
+    phantomMover(e, dx, dy);           // Reaper: crates+barrels only, never bodyHitsWall (R4)
   } else {
     groundMover(e, dx, dy);            // moveBody vs walls+movables — no tunneling
   }
@@ -334,6 +400,9 @@ function deathSweep() {
     dropGems(e);
     awardKill(e, cause);
     emit("enemy:killed", { type: e.type, x: e.x, y: e.y, points: e.points, cause });
+    // Reaper death → the boss-kill FX event (screen-shake + hit-stop, #7/#10, §6.3).
+    // Keyed on e.boss so it fires for any boss, not a hardcoded type check.
+    if (e.boss) emit("boss:killed", { type: e.type, x: e.x, y: e.y, shake: true, hitStop: true });
     if (e.contact) clearMeleePair(e);
     if (e.nav) removeNavigator(e);   // drop the A* registry entry (Zombie/Shooter/Wraith/Reaper)
     removeLight(e);
